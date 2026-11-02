@@ -1,0 +1,1 @@
+Como un spotify, un shazam y google lens pero todo a la vez shalom
