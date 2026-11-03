@@ -174,6 +174,13 @@ def deezer_top_tracks(artist_id, limit):
     return (d or {}).get("data", [])
 
 
+def artist_dir(name, aid):
+    """Carpeta legible y única: 'bad-bunny_8355' (el id evita choques de nombre)."""
+    t = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
+    t = re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:40].strip("-")
+    return f"{t or 'artista'}_{aid}"
+
+
 def norm(text):
     """Minúsculas, sin tildes, sin '(feat. ...)', '[...]' ni ' - Remastered'."""
     t = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
@@ -244,6 +251,11 @@ def commons_images(name, max_images):
     qid = wikidata_entity(name)
     if not qid:
         return None, []
+    return qid, commons_images_for_qid(qid, max_images)
+
+
+def commons_images_for_qid(qid, max_images):
+    """Foto P18 y archivos de la categoría de Commons (P373) de una entidad."""
     d = http_get("https://www.wikidata.org/w/api.php?" + urllib.parse.urlencode({
         "action": "wbgetentities", "ids": qid, "props": "claims", "format": "json"}))
     claims = ((d or {}).get("entities", {}).get(qid, {}) or {}).get("claims", {})
@@ -290,7 +302,7 @@ def commons_images(name, max_images):
                     "author": author[:200], "page": info.get("descriptionurl", "")})
         if len(out) >= max_images:
             break
-    return qid, out
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -325,11 +337,11 @@ def write_csv(path, fields, rows):
 def process_artist(artist, genre, out, per_artist, extra_images, done_tracks):
     aid = str(artist["id"])
     name = artist["name"]
-    adir = os.path.join(out, "artists", aid)
-    os.makedirs(adir, exist_ok=True)
+    folder = os.path.join("artists", artist_dir(name, aid))
+    os.makedirs(os.path.join(out, folder), exist_ok=True)
 
     # --- imágenes del artista ---
-    main_path = os.path.join("artists", aid, "main.jpg")
+    main_path = os.path.join(folder, "main.jpg")
     images = []
     if download(real_image(artist.get("picture_xl")), os.path.join(out, main_path)):
         images.append({"artist_id": aid, "path": main_path, "source": "deezer",
@@ -339,7 +351,7 @@ def process_artist(artist, genre, out, per_artist, extra_images, done_tracks):
     qid, commons = commons_images(name, extra_images)
     extras += commons
     for i, img in enumerate(extras[:extra_images + 7], 1):
-        rel = os.path.join("artists", aid, f"extra_{i:02d}{ext_of(img['url'])}")
+        rel = os.path.join(folder, f"extra_{i:02d}{ext_of(img['url'])}")
         if download(img["url"], os.path.join(out, rel)):
             images.append({"artist_id": aid, "path": rel, "source": img["source"],
                            "license": img.get("license", ""),
@@ -405,6 +417,17 @@ def main():
     args = ap.parse_args()
 
     out = args.out
+    os.makedirs(out, exist_ok=True)
+    lock = os.path.join(out, ".fetch.lock")
+    with open(lock, "w") as f:
+        f.write(str(os.getpid()))
+    try:
+        run(args, out)
+    finally:
+        os.remove(lock)
+
+
+def run(args, out):
     for sub in ("audio", "lyrics", "covers", "artists"):
         os.makedirs(os.path.join(out, sub), exist_ok=True)
 
