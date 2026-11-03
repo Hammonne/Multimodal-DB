@@ -1,0 +1,4 @@
+numpy
+opencv-python>=4.4
+Pillow
+face_recognition
