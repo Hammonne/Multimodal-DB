@@ -28,8 +28,8 @@ la misma carpeta: no se vuelve a descargar nada.
 
 ## Contenido
 
-Solo los CSV y este README están en el repositorio; los archivos multimedia
-quedan fuera por `.gitignore` y cada integrante los genera localmente.
+Los datos no están en el repositorio (`.gitignore`): cada integrante los genera
+localmente con los scripts. Solo se versiona este README.
 
 ```
 data/
