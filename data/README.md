@@ -6,8 +6,14 @@ librería estándar de Python 3.9+, no necesita API keys y se puede interrumpir 
 volver a correr: retoma desde los CSV.
 
 ```bash
-python3 scripts/fetch_music.py --songs 1000      # luego 10000 y 100000
+python3 scripts/fetch_music.py --songs 1000      # canciones, portadas, fotos
+python3 scripts/fetch_members.py                 # persona o banda, integrantes
+conda activate vision                            # entorno con face_recognition
+python scripts/filter_artist_faces.py --delete   # deja solo fotos de caras
 ```
+
+`fetch_music.py` y `fetch_members.py` pueden correr a la vez; el filtro con
+`--delete` espera a que ambos terminen.
 
 | Opción | Por defecto | Descripción |
 |---|---|---|
@@ -30,14 +36,25 @@ data/
 ├── songs.csv
 ├── artists.csv
 ├── artist_images.csv
+├── artist_types.csv
+├── members.csv
+├── band_members.csv
+├── member_images.csv
+├── artist_faces.csv
+├── member_faces.csv
 ├── audio/<track_id>.mp3          preview de 30 s
 ├── lyrics/<track_id>.txt         letra en texto plano
 ├── lyrics/<track_id>.lrc         letra sincronizada (si existe)
 ├── covers/<album_id>.jpg         portada del álbum (1000×1000)
-└── artists/<artist_id>/
+└── artists/<nombre>_<artist_id>/   p. ej. artists/bad-bunny_8355/
     ├── main.jpg                  foto principal (Deezer)
     └── extra_NN.jpg|png          fotos adicionales (TheAudioDB, Commons)
+└── members/<nombre>_<id>/        integrante de una banda
+    └── photo_NN.jpg|png          fotos (Wikimedia Commons)
 ```
+
+El nombre de la carpeta del artista va sin tildes ni espacios; el id de Deezer
+al final evita choques entre artistas con el mismo nombre.
 
 Las rutas de los CSV son relativas a `data/`.
 
@@ -64,6 +81,24 @@ su fuente (`deezer`, `theaudiodb`, `wikimedia_commons`), licencia, autor y
 página de origen cuando la fuente los publica (Commons sí; Deezer y TheAudioDB
 no).
 
+### artist_types.csv
+
+`artist_id, name, musicbrainz_id, type, match`: `type` es `persona`, `banda`,
+`otro` o `desconocido` (no está en MusicBrainz); `match` indica si se encontró
+por el enlace a Deezer o por nombre.
+
+### Integrantes de bandas
+
+- `members.csv`: `member_id` (MusicBrainz), `name, wikidata_id, occupations,
+  n_images, folder`. Un integrante de varias bandas aparece una sola vez.
+- `band_members.csv`: `artist_id, band, member_id, member, roles,
+  roles_source, founder, current, begin, end`. `roles` es el puesto en esa
+  banda (guitarrista, bajista, baterista, vocalista, corista, tecladista, DJ…);
+  si MusicBrainz no registra instrumentos se usan las ocupaciones generales de
+  Wikidata (`roles_source = wikidata`) y si tampoco hay, `integrante`.
+  `current` distingue integrantes actuales de anteriores.
+- `member_images.csv`: igual que `artist_images.csv`, por integrante.
+
 ## Fuentes
 
 | Dato | Fuente |
@@ -72,6 +107,7 @@ no).
 | Letras | [LRCLIB](https://lrclib.net) (`/api/search`: `plainLyrics`, `syncedLyrics`) |
 | Fotos extra | [TheAudioDB](https://www.theaudiodb.com) (thumbs y fanart) |
 | Fotos extra con licencia | [Wikidata](https://www.wikidata.org) (P18, P373) + [Wikimedia Commons](https://commons.wikimedia.org) |
+| Persona o banda, integrantes y puesto | [MusicBrainz](https://musicbrainz.org) (relación "member of band" con instrumentos); Wikidata P106 como respaldo |
 
 ### Cómo se eligen las canciones
 
@@ -87,10 +123,33 @@ no).
    artista y título (sin tildes, paréntesis ni sufijos tipo "- Remastered") y
    duración a ±15 s, prefiriendo los que tienen letra sincronizada.
 
+## Filtro de caras: artist_faces.csv y member_faces.csv
+
+Las fotos extra incluyen conciertos, público, logos y carteles.
+`scripts/filter_artist_faces.py` deja solo fotos útiles para buscar por cara:
+
+- **Solista o integrante:** fotos donde aparece esa persona sola, con la cara
+  de al menos el 8 % del alto de la imagen.
+- **Banda:** una sola foto de grupo (2+ caras de la banda y ninguna ajena),
+  preferentemente la principal de Deezer. Las fotos de cara de cada
+  integrante están en `members/`.
+
+Cómo sabe quién es quién: detecta las caras de todas las fotos de un artista o
+integrante con `face_recognition` y toma como suyas las que se repiten en
+varias fotos (distancia < 0.55); los fans no se repiten. Una foto con cualquier
+cara ajena (de más del 3 % del alto) o con más de 12 caras se rechaza. Si
+ninguna cara se repite, solo acepta la foto principal si tiene una sola cara.
+
+Columnas: `artist_id | member_id, path, source, n_faces, keep, kind,
+face_box`, con `kind` = `cara` o `banda` y `face_box` = `top right bottom
+left` en píxeles de la imagen original, para recortar la cara.
+
+Sin `--delete` solo marca; con `--delete` borra del disco las fotos rechazadas
+y las quita de `artist_images.csv` / `member_images.csv` (los `*_faces.csv`
+quedan como registro). Necesita `artist_types.csv`, así que va después de
+`fetch_members.py`. Es reanudable: solo procesa artistas e integrantes nuevos.
+
 ### Consideraciones
 
-- Las fotos extra de Commons salen de la categoría del artista y pueden incluir
-  logos, carteles o fotos donde aparece otra persona; conviene filtrarlas con
-  detección de rostros antes de usarlas para similitud.
 - Los previews de Deezer y las imágenes de Deezer y TheAudioDB tienen
   copyright: el dataset es solo para uso académico y no se redistribuye.
