@@ -1,0 +1,158 @@
+"""Descriptores locales SIFT de imágenes (Parte 4, §2.4.1)
+
+Cada imagen se convierte en un conjunto de descriptores de 128 dimensiones, uno
+por punto clave (esquinas, manchas, zonas con textura). Son invariantes a escala
+y rotación y robustos a cambios de brillo, así que la misma portada recortada,
+rotada o más oscura da descriptores parecidos. En el siguiente paso (#4) se
+cuantizan con K-Means para armar el histograma de "palabras visuales".
+
+Se guardan en data/features/sift/ con la misma estructura de carpetas que las
+imágenes (un .npy por imagen, matriz n x 128 float32) más un índice CSV. Es
+reanudable: no recalcula las imágenes que ya tienen su .npy.
+
+Uso:
+    conda activate vision
+    python -m multimedia.sift --source covers
+    python -m multimedia.sift --source all --limit 50
+"""
+import argparse
+import csv
+import os
+import time
+from multiprocessing import Pool
+
+import cv2
+import numpy as np
+
+MAX_SIDE = 512      # se achica la imagen: en 1000+ px SIFT es lento y no aporta más
+N_FEATURES = 500    # máximo de puntos clave por imagen (los de mayor contraste)
+ROOT_SIFT = True    # RootSIFT: normaliza L1 y saca raíz, mejora la distancia euclidiana
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA = os.path.join(REPO, "data")
+OUT_DIR = os.path.join("features", "sift")
+INDEX_FIELDS = ["path", "kind", "owner_id", "n_descriptors", "features_path"]
+
+
+def leer_gris(path, max_side=MAX_SIDE):
+    """Imagen en escala de grises (SIFT no usa color), con el lado mayor <= max_side"""
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError(f"no se pudo leer {path}")
+    h, w = img.shape
+    escala = max_side / max(h, w)
+    if escala < 1:
+        img = cv2.resize(img, (round(w * escala), round(h * escala)),
+                         interpolation=cv2.INTER_AREA)
+    return img
+
+
+def extraer_sift(path, n_features=N_FEATURES, root=ROOT_SIFT):
+    """Descriptores SIFT de una imagen: matriz (n, 128) float32, n <= n_features.
+
+    Si la imagen no tiene puntos clave (por ejemplo, un color plano) devuelve
+    una matriz (0, 128)."""
+    sift = cv2.SIFT_create(nfeatures=n_features)
+    _, desc = sift.detectAndCompute(leer_gris(path), None)
+    if desc is None:
+        return np.zeros((0, 128), dtype=np.float32)
+    if root:
+        desc = desc / (desc.sum(axis=1, keepdims=True) + 1e-7)
+        desc = np.sqrt(desc)
+    return desc.astype(np.float32)
+
+
+def leer_csv(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def imagenes(source, data=DATA):
+    """[(path relativo a data/, tipo, id del dueño)] de las imágenes a procesar.
+
+    covers: portadas de álbum; artists: fotos de artistas aceptadas por el
+    filtro de caras (o todas si aún no se corrió); members: fotos de
+    integrantes aceptadas."""
+    out = []
+    if source in ("covers", "all"):
+        vistos = set()
+        for s in leer_csv(os.path.join(data, "songs.csv")):
+            if s["cover_path"] and s["cover_path"] not in vistos:
+                vistos.add(s["cover_path"])
+                out.append((s["cover_path"], "cover", s["album_id"]))
+    if source in ("artists", "all"):
+        caras = leer_csv(os.path.join(data, "artist_faces.csv"))
+        filas = [r for r in caras if r["keep"] == "True"] if caras else \
+            leer_csv(os.path.join(data, "artist_images.csv"))
+        out += [(r["path"], "artist", r["artist_id"]) for r in filas]
+    if source in ("members", "all"):
+        out += [(r["path"], "member", r["member_id"])
+                for r in leer_csv(os.path.join(data, "member_faces.csv")) if r["keep"] == "True"]
+    return out
+
+
+def ruta_features(path):
+    return os.path.join(OUT_DIR, os.path.splitext(path)[0] + ".npy")
+
+
+def procesar(trabajo):
+    path, kind, owner, data = trabajo
+    destino = ruta_features(path)
+    completo = os.path.join(data, destino)
+    if os.path.exists(completo):
+        n = len(np.load(completo, mmap_mode="r"))
+    else:
+        try:
+            desc = extraer_sift(os.path.join(data, path))
+        except Exception:
+            return None
+        os.makedirs(os.path.dirname(completo), exist_ok=True)
+        np.save(completo, desc)
+        n = len(desc)
+    return {"path": path, "kind": kind, "owner_id": owner,
+            "n_descriptors": n, "features_path": destino}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--source", choices=["covers", "artists", "members", "all"], default="all")
+    ap.add_argument("--limit", type=int, default=0, help="procesar solo las primeras N")
+    ap.add_argument("--data", default=DATA)
+    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    args = ap.parse_args()
+
+    lista = imagenes(args.source, args.data)
+    if args.limit:
+        lista = lista[:args.limit]
+    print(f"{len(lista)} imágenes ({args.source})", flush=True)
+
+    t0 = time.time()
+    filas, fallos = [], 0
+    with Pool(args.workers) as pool:
+        trabajos = [(p, k, o, args.data) for p, k, o in lista]
+        for i, r in enumerate(pool.imap(procesar, trabajos, chunksize=8), 1):
+            if r is None:
+                fallos += 1
+            else:
+                filas.append(r)
+            if i % 500 == 0:
+                print(f"  {i}/{len(lista)}", flush=True)
+
+    indice = os.path.join(args.data, "features", f"sift_{args.source}.csv")
+    os.makedirs(os.path.dirname(indice), exist_ok=True)
+    with open(indice, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=INDEX_FIELDS)
+        w.writeheader()
+        w.writerows(filas)
+
+    n = [r["n_descriptors"] for r in filas]
+    print(f"{len(filas)} imágenes en {time.time() - t0:.1f} s, {fallos} fallos; "
+          f"descriptores por imagen: media {np.mean(n):.0f}, mín {min(n)}, máx {max(n)}; "
+          f"total {sum(n)}\nÍndice: {indice}")
+
+
+if __name__ == "__main__":
+    main()
