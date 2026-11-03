@@ -1,0 +1,9 @@
+# Dataset: solo se versionan los CSV y el README; audio, letras e imágenes no
+data/*
+!data/*.csv
+!data/README.md
+*.part
+
+__pycache__/
+*.pyc
+.DS_Store
