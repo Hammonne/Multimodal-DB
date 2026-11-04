@@ -1,24 +1,6 @@
-"""
-Clasifica cada artista como persona o banda y, para las bandas, descarga a sus
-integrantes con su puesto (guitarrista, bajista, ...) y fotos de cada uno.
-
-Usa MusicBrainz para el tipo de artista y los integrantes (con el instrumento
-que toca cada uno en esa banda) y Wikidata/Wikimedia Commons para las fotos de
-los integrantes. Lee data/artists.csv (generado por fetch_music.py) y no lo
-modifica, así que puede correr mientras fetch_music.py sigue descargando.
-Es reanudable: solo procesa los artistas nuevos.
-
-Salida en data/:
-  artist_types.csv    tipo de cada artista (persona, banda, otro, desconocido)
-  members.csv         una fila por integrante
-  band_members.csv    integrante de qué banda, puesto, actual o anterior
-  member_images.csv   fotos de cada integrante (fuente, licencia, autor)
-  members/<nombre>_<id>/photo_NN.jpg
-
-Uso:
-  python3 scripts/fetch_members.py
-  python3 scripts/fetch_members.py --member-images 10
-"""
+# clasifica cada artista en persona o banda y baja los integrantes con su puesto
+# puestos de musicbrainz (o wikidata), fotos de wikimedia commons
+# uso: python3 scripts/fetch_members.py
 
 import argparse
 import csv
@@ -34,7 +16,7 @@ MB = "https://musicbrainz.org/ws/2"
 
 TYPES = {"Person": "persona", "Group": "banda", "Orchestra": "banda", "Choir": "banda"}
 
-# instrumento de MusicBrainz -> puesto
+# instrumento de musicbrainz -> puesto
 ROLES = {
     "guitar": "guitarrista", "electric guitar": "guitarrista",
     "acoustic guitar": "guitarrista", "lead guitar": "guitarrista principal",
@@ -49,7 +31,7 @@ ROLES = {
     "flute": "flautista", "harmonica": "armonicista", "accordion": "acordeonista",
     "turntables": "DJ", "programming": "programador",
 }
-# ocupación en Wikidata (P106) -> puesto; se usa si MusicBrainz no da instrumentos
+# ocupación en wikidata (P106) -> puesto, por si musicbrainz no da instrumentos
 OCCUPATIONS = {
     "Q177220": "vocalista", "Q2643890": "vocalista", "Q488205": "vocalista",
     "Q855091": "guitarrista", "Q584301": "bajista", "Q386854": "baterista",
@@ -71,7 +53,7 @@ def mb_get(path, **params):
 
 
 def find_artist(deezer_id, name):
-    """(mbid, cómo se encontró): primero por el enlace a Deezer, luego por nombre."""
+    # primero por el link de deezer, si no por nombre
     d = mb_get("url", resource=f"https://www.deezer.com/artist/{deezer_id}",
                inc="artist-rels")
     for r in (d or {}).get("relations", []):
@@ -104,7 +86,7 @@ def wikidata_occupations(qid):
 
 
 def band_members(mb_artist):
-    """Integrantes de la banda agrupando las relaciones de cada persona."""
+    # junta las relaciones de cada integrante (puede tener varias)
     members = {}
     for r in mb_artist.get("relations", []):
         if r.get("type") != "member of band" or r.get("direction") != "backward":
@@ -131,8 +113,7 @@ def band_members(mb_artist):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="clasifica artistas en persona o banda y baja los integrantes")
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument("--data", default=os.path.join(repo, "data"))
     ap.add_argument("--member-images", type=int, default=8,
@@ -178,8 +159,8 @@ def run(args, out):
 
     def fetch_member(mid, name):
         d = mb_get(f"artist/{mid}", inc="url-rels") or {}
-        # sin enlace en MusicBrainz: búsqueda por nombre, solo si la
-        # descripción en Wikidata es de músico (ARTIST_WORDS)
+        # si musicbrainz no tiene el link se busca por nombre, solo si
+        # en wikidata dice que es músico (ARTIST_WORDS)
         qid = wikidata_of(d) or fm.wikidata_entity(name) or ""
         occ = "; ".join(wikidata_occupations(qid)) if qid else ""
         folder = os.path.join("members", fm.artist_dir(name, mid[:8]))

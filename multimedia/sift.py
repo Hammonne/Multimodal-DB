@@ -1,20 +1,7 @@
-"""Descriptores locales SIFT de imágenes (Parte 4, §2.4.1)
+# descriptores sift de las imágenes (parte 4), uno de 128 por punto clave
+# se guardan en data/features/sift/, más info en multimedia/README.md
+# uso: python -m multimedia.sift --source covers|artists|members|all
 
-Cada imagen se convierte en un conjunto de descriptores de 128 dimensiones, uno
-por punto clave (esquinas, manchas, zonas con textura). Son invariantes a escala
-y rotación y robustos a cambios de brillo, así que la misma portada recortada,
-rotada o más oscura da descriptores parecidos. En el siguiente paso (#4) se
-cuantizan con K-Means para armar el histograma de "palabras visuales".
-
-Se guardan en data/features/sift/ con la misma estructura de carpetas que las
-imágenes (un .npy por imagen, matriz n x 128 float32) más un índice CSV. Es
-reanudable: no recalcula las imágenes que ya tienen su .npy.
-
-Uso:
-    conda activate vision
-    python -m multimedia.sift --source covers
-    python -m multimedia.sift --source all --limit 50
-"""
 import argparse
 import csv
 import os
@@ -35,7 +22,7 @@ INDEX_FIELDS = ["path", "kind", "owner_id", "n_descriptors", "features_path"]
 
 
 def leer_gris(path, max_side=MAX_SIDE):
-    """Imagen en escala de grises (SIFT no usa color), con el lado mayor <= max_side"""
+    # en gris (sift no usa color) y con el lado mayor <= max_side
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise ValueError(f"no se pudo leer {path}")
@@ -48,10 +35,7 @@ def leer_gris(path, max_side=MAX_SIDE):
 
 
 def extraer_sift(path, n_features=N_FEATURES, root=ROOT_SIFT):
-    """Descriptores SIFT de una imagen: matriz (n, 128) float32, n <= n_features.
-
-    Si la imagen no tiene puntos clave (por ejemplo, un color plano) devuelve
-    una matriz (0, 128)."""
+    # (n, 128), o (0, 128) si no encuentra puntos clave
     sift = cv2.SIFT_create(nfeatures=n_features)
     _, desc = sift.detectAndCompute(leer_gris(path), None)
     if desc is None:
@@ -70,11 +54,8 @@ def leer_csv(path):
 
 
 def imagenes(source, data=DATA):
-    """[(path relativo a data/, tipo, id del dueño)] de las imágenes a procesar.
-
-    covers: portadas de álbum; artists: fotos de artistas aceptadas por el
-    filtro de caras (o todas si aún no se corrió); members: fotos de
-    integrantes aceptadas."""
+    # [(path, tipo, id del dueño)] de portadas, artistas o integrantes
+    # en artistas e integrantes solo las que aceptó el filtro de caras
     out = []
     if source in ("covers", "all"):
         vistos = set()
@@ -116,8 +97,7 @@ def procesar(trabajo):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="descriptores sift de las imágenes (parte 4)")
     ap.add_argument("--source", choices=["covers", "artists", "members", "all"], default="all")
     ap.add_argument("--limit", type=int, default=0, help="procesar solo las primeras N")
     ap.add_argument("--data", default=DATA)

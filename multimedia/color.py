@@ -1,36 +1,7 @@
-"""Histograma de color de las portadas (descriptor global, complementa a SIFT)
+# histograma de color de las portadas, para lo que sift no ve (color)
+# 50 dims en hsv, casi sin brillo para que aguante portadas oscurecidas
+# uso: python -m multimedia.color
 
-SIFT trabaja en escala de grises y solo ve bordes y textura: una portada de un
-color plano, o con texto y fondo de colores distintos pero del mismo brillo
-(rojo sobre magenta), no le da ningún punto clave. El histograma de color
-describe la imagen completa por la proporción de cada color, así que también
-distingue esas portadas.
-
-Se usa HSV (tono, saturación, brillo) en lugar de RGB y casi no se mira el
-brillo, para que oscurecer o aclarar una portada no cambie el vector:
-  - píxeles con color: 12 tonos x 4 saturaciones = 48 bins
-  - píxeles casi grises (poca saturación o casi negros), donde el tono no
-    significa nada: 2 bins, oscuro y claro
-En total 50 dimensiones. Con 3 niveles de brillo por color (116 dimensiones)
-una portada oscurecida al 60 % encontraba la original en el top 10 solo el
-17 % de las veces; con esta versión, el 91 %.
-
-Se normaliza para que sume 1 y se saca la raíz (como RootSIFT): así la
-distancia euclidiana entre dos vectores equivale a la distancia de Hellinger
-entre histogramas y sirve directo en IVF/HNSW.
-
-Es un vector por imagen, como los embeddings de cara del Lab 11, así que no
-necesita codebook. No reconoce "la misma portada", solo "colores parecidos"
-(todas las portadas negras quedan juntas); por eso se combina con SIFT:
-    similitud = a * sim_sift + (1 - a) * sim_color
-
-Guarda data/features/color_covers.npz con hist (n, 50) float32, path y
-album_id.
-
-Uso:
-    conda activate vision
-    python -m multimedia.color
-"""
 import argparse
 import os
 import time
@@ -50,7 +21,7 @@ OUT = os.path.join("features", "color_covers.npz")
 
 
 def histograma_color(path):
-    """Vector (DIM,) float32 con norma L2 = 1."""
+    # vector de DIM con norma 1
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError(f"no se pudo leer {path}")
@@ -81,8 +52,7 @@ def procesar(trabajo):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="histograma de color de las portadas")
     ap.add_argument("--data", default=DATA)
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     args = ap.parse_args()

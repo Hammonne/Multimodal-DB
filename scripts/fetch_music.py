@@ -1,21 +1,6 @@
-"""
-Descarga un dataset multimedia de canciones para las Partes 3 y 4.
-
-Por cada canción:
-  - audio:  preview mp3 de 30 s (Deezer)
-  - letra:  texto plano y versión sincronizada .lrc (LRCLIB)
-  - portada del álbum (Deezer)
-Por cada artista:
-  - foto principal (Deezer)
-  - fotos extra (TheAudioDB + Wikidata/Wikimedia Commons)
-
-Solo usa la librería estándar. Se puede interrumpir y volver a correr:
-retoma desde donde quedó.
-
-Uso:
-  python3 scripts/fetch_music.py --songs 1000
-  python3 scripts/fetch_music.py --songs 10000 --per-artist 10 --out data
-"""
+# descarga canciones: preview mp3, letra (.txt y .lrc), portada y fotos del artista
+# solo usa la librería estándar, si se corta se vuelve a correr y sigue
+# uso: python3 scripts/fetch_music.py --songs 1000
 
 import argparse
 import csv
@@ -36,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 USER_AGENT = ("chutadb-dataset/0.1 (proyecto academico BD2 UTEC; "
               "https://github.com/Hammonne/Multimodal-DB)")
 
-# Géneros de Deezer usados como semilla: (id, nombre)
+# géneros de deezer que se usan como semilla: (id, nombre)
 GENRES = [
     (132, "Pop"), (116, "Rap/Hip Hop"), (122, "Reggaetón"), (152, "Rock"),
     (113, "Dance"), (165, "R&B"), (85, "Alternativo"), (106, "Electro"),
@@ -49,9 +34,7 @@ ARTIST_WORDS = re.compile(
     r"cantante|banda|músic|grupo|rappeur|chanteu|sänger", re.I)
 
 
-# --------------------------------------------------------------------------- #
-# HTTP con límite de velocidad por host
-# --------------------------------------------------------------------------- #
+# http con límite de velocidad por host
 
 class Throttle:
     def __init__(self, per_second):
@@ -92,7 +75,7 @@ def http_get(url, binary=False, retries=3, timeout=30):
             if binary:
                 return data
             obj = json.loads(data.decode("utf-8"))
-            # Deezer devuelve errores de cuota como JSON con código 4
+            # deezer devuelve los errores de cuota como json con código 4
             if isinstance(obj, dict) and isinstance(obj.get("error"), dict) \
                     and obj["error"].get("code") == 4:
                 time.sleep(5 * (attempt + 1))
@@ -111,7 +94,7 @@ def http_get(url, binary=False, retries=3, timeout=30):
 
 
 def download(url, path):
-    """Descarga a disco si no existe. Devuelve True si el archivo quedó."""
+    # True si el archivo quedó en disco
     if not url:
         return False
     if os.path.exists(path) and os.path.getsize(path) > 0:
@@ -127,7 +110,7 @@ def download(url, path):
 
 
 def real_image(url):
-    """Deezer usa URLs con hash vacío ('/artist//', '/cover//') como imagen genérica."""
+    # deezer usa urls con hash vacío ('/artist//') como imagen genérica
     return url if url and "//" not in urllib.parse.urlparse(url).path else None
 
 
@@ -139,13 +122,11 @@ def ext_of(url, default=".jpg"):
     return default
 
 
-# --------------------------------------------------------------------------- #
-# Fuentes
-# --------------------------------------------------------------------------- #
+# fuentes
 
 def deezer_seed_artists(genre_id, genre_name, radios=6, playlists=3):
-    """Artistas de las radios del género y de las playlists que lo mencionan,
-    ordenados por cuántas veces aparecen (/genre/{id}/artists ignora el género)."""
+    # artistas de las radios y playlists del género, ordenados por frecuencia
+    # /genre/{id}/artists devuelve lo mismo para todos los géneros
     sources = []
     d = http_get(f"https://api.deezer.com/genre/{genre_id}/radios")
     sources += [f"https://api.deezer.com/radio/{r['id']}/tracks?limit=100"
@@ -175,14 +156,14 @@ def deezer_top_tracks(artist_id, limit):
 
 
 def artist_dir(name, aid):
-    """Carpeta legible y única: 'bad-bunny_8355' (el id evita choques de nombre)."""
+    # 'bad-bunny_8355', el id evita choques de nombre
     t = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
     t = re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:40].strip("-")
     return f"{t or 'artista'}_{aid}"
 
 
 def norm(text):
-    """Minúsculas, sin tildes, sin '(feat. ...)', '[...]' ni ' - Remastered'."""
+    # minúsculas, sin tildes, sin (feat. ...), [...] ni ' - Remastered'
     t = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
     t = re.sub(r"\(.*?\)|\[.*?\]| - .*$", "", t)
     t = re.sub(r"[^a-z0-9]+", " ", t).strip()
@@ -190,9 +171,8 @@ def norm(text):
 
 
 def lrclib_lyrics(artist, title, duration, max_diff=15):
-    """/api/search responde rápido; /api/get tarda hasta 25 s cuando no tiene la
-    letra porque la busca en fuentes externas. Se elige el candidato con el mismo
-    artista y título, duración parecida y, de preferencia, letra sincronizada."""
+    # /api/get tarda hasta 25 s cuando no tiene la letra, por eso /api/search
+    # y se valida artista, título y duración, mejor si es sincronizada
     res = http_get("https://lrclib.net/api/search?" + urllib.parse.urlencode(
         {"artist_name": artist, "track_name": title}))
     na, nt = norm(artist), norm(title)
@@ -255,7 +235,7 @@ def commons_images(name, max_images):
 
 
 def commons_images_for_qid(qid, max_images):
-    """Foto P18 y archivos de la categoría de Commons (P373) de una entidad."""
+    # foto P18 y fotos de la categoría de commons (P373)
     d = http_get("https://www.wikidata.org/w/api.php?" + urllib.parse.urlencode({
         "action": "wbgetentities", "ids": qid, "props": "claims", "format": "json"}))
     claims = ((d or {}).get("entities", {}).get(qid, {}) or {}).get("claims", {})
@@ -305,9 +285,7 @@ def commons_images_for_qid(qid, max_images):
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Pipeline
-# --------------------------------------------------------------------------- #
+# pipeline
 
 SONG_FIELDS = ["track_id", "title", "artist_id", "artist", "album_id", "album",
                "genre", "duration_s", "deezer_rank", "explicit", "has_lyrics",
@@ -340,7 +318,7 @@ def process_artist(artist, genre, out, per_artist, extra_images, done_tracks):
     folder = os.path.join("artists", artist_dir(name, aid))
     os.makedirs(os.path.join(out, folder), exist_ok=True)
 
-    # --- imágenes del artista ---
+    # imágenes del artista
     main_path = os.path.join(folder, "main.jpg")
     images = []
     if download(real_image(artist.get("picture_xl")), os.path.join(out, main_path)):
@@ -363,7 +341,7 @@ def process_artist(artist, genre, out, per_artist, extra_images, done_tracks):
                   "main_image_path": main_path if images and images[0]["source"] == "deezer" else "",
                   "deezer_url": artist.get("link", "")}
 
-    # --- canciones ---
+    # canciones
     songs = []
     for t in deezer_top_tracks(aid, per_artist):
         tid = str(t["id"])
@@ -405,8 +383,7 @@ def process_artist(artist, genre, out, per_artist, extra_images, done_tracks):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="descarga canciones con audio, letra, portada y fotos del artista")
     ap.add_argument("--songs", type=int, default=1000, help="canciones objetivo")
     ap.add_argument("--per-artist", type=int, default=5, help="canciones por artista")
     ap.add_argument("--extra-images", type=int, default=8,
@@ -441,8 +418,8 @@ def run(args, out):
     done_artists = {a["artist_id"] for a in artists}
     print(f"Retomando: {len(songs)} canciones, {len(artists)} artistas ya descargados")
 
-    # Cola de artistas: semillas por género, luego expansión por artistas relacionados
-    # a partir de todos los artistas ya procesados (también los de corridas anteriores)
+    # cola: primero las semillas por género, luego artistas relacionados
+    # de todos los ya procesados (también de corridas anteriores)
     queue, queued = [], set(done_artists)
     expand_from = [(a["artist_id"], a["genre"]) for a in artists]
     with ThreadPoolExecutor(max_workers=len(GENRES)) as pool:

@@ -1,31 +1,6 @@
-"""
-Deja solo las fotos útiles para buscar por cara: el artista solo o, en las
-bandas, una única foto de grupo; y fotos de cada integrante solo.
-
-Las fotos extra (Wikimedia Commons, TheAudioDB) incluyen conciertos, público,
-carteles y logos. Para cada artista o integrante se detectan las caras de todas
-sus fotos y se toman como "suyas" las que se repiten en varias fotos (la
-persona o los integrantes de la banda aparecen en muchas, los fans no).
-
-  persona / integrante: se acepta una foto si tiene una sola cara, es suya y
-      tiene el tamaño mínimo (--min-face).
-  banda: se acepta una sola foto de grupo: la principal de Deezer si tiene
-      caras (si no, es un logo) o, si no, una extra con 2+ caras de la banda y
-      ninguna ajena. Las fotos de cada integrante salen de fetch_members.py.
-Si ninguna cara se repite, solo se acepta la foto principal (Deezer, o la
-primera foto del integrante) si tiene exactamente una cara.
-
-Necesita data/artist_types.csv (fetch_members.py) para saber qué artistas son
-bandas; los artistas aún sin clasificar se dejan para la siguiente corrida.
-
-Escribe data/artist_faces.csv y data/member_faces.csv. Con --delete además
-borra del disco las fotos rechazadas y las quita de los CSV de imágenes. Es
-reanudable: solo procesa artistas e integrantes nuevos.
-
-Requiere face_recognition, numpy y Pillow (por ejemplo, el entorno del Lab 11):
-  python scripts/filter_artist_faces.py
-  python scripts/filter_artist_faces.py --delete
-"""
+# deja solo fotos donde sale el artista solo, y una foto de grupo por banda
+# sin --delete solo marca, con --delete borra las rechazadas
+# uso: python scripts/filter_artist_faces.py [--delete]
 
 import argparse
 import csv
@@ -55,8 +30,8 @@ def load(path):
 
 
 def faces_in(path, min_other):
-    """[(encoding, alto relativo, (top, right, bottom, left))] con la caja en
-    coordenadas de la imagen original; None si es una multitud."""
+    # [(encoding, alto relativo, caja en la imagen original)]
+    # None si es una multitud
     arr, scale = load(path)
     boxes = [b for b in face_recognition.face_locations(arr, number_of_times_to_upsample=1)
              if (b[2] - b[0]) / arr.shape[0] >= min_other]
@@ -107,8 +82,8 @@ def process(job):
 
     keep = [""] * len(rows)
     if kind == "banda":
-        # la principal de Deezer es la foto oficial de la banda: basta con que
-        # tenga caras (si no, es un logo); si no, una foto de grupo de las extras
+        # la de deezer es la foto oficial de la banda, basta con que tenga caras
+        # (si no, es un logo); si no hay, una foto de grupo de las extras
         if primary >= 0 and per_image[primary]:
             keep[primary] = "banda"
         else:
@@ -198,8 +173,7 @@ def run_entity(args, pool, name, id_field, images, done, kinds):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="deja solo fotos del artista solo o una de grupo por banda")
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument("--data", default=os.path.join(repo, "data"))
     ap.add_argument("--tolerance", type=float, default=0.55,

@@ -1,32 +1,7 @@
-"""Descriptores locales MFCC de audio (Parte 4, §2.4.1)
+# descriptores mfcc del audio (parte 4), el equivalente a sift para audio
+# ventana de 93 ms que avanza 23 ms, 39 números por ventana
+# uso: python -m multimedia.mfcc
 
-Es el equivalente de SIFT para audio. Una canción no se describe con un solo
-vector: se recorre con una ventana deslizante de ~93 ms que avanza ~23 ms (las
-ventanas se solapan un 75 %) y cada ventana se convierte en un vector:
-
-    señal -> ventana -> FFT -> 40 bandas mel -> log -> DCT -> 13 coeficientes
-
-Los coeficientes describen el timbre de ese instante (qué instrumentos o voz
-suenan y con qué color), no la melodía. Se descarta el coeficiente 0, que es
-el volumen, para que la misma canción más fuerte o más suave dé lo mismo, y se
-agregan sus deltas (cuánto cambia cada coeficiente entre ventanas) y
-delta-deltas (la aceleración): 13 + 13 + 13 = 39 dimensiones.
-
-Un preview de 30 s da ~1290 ventanas: matriz (n, 39) float32, igual que SIFT
-da (n, 128) por imagen. En el siguiente paso (#4) se cuantizan con K-Means en
-"palabras de audio" y (#5) cada canción pasa a ser un histograma TF-IDF.
-
-La fila i corresponde al instante i * HOP / SR segundos, así que también sirve
-para buscar por fragmentos (por ejemplo, segmentos de 5-10 s en la Opción C).
-
-Se guardan en data/features/mfcc/<track_id>.npy más un índice CSV. Es
-reanudable: no recalcula las canciones que ya tienen su .npy.
-
-Uso:
-    conda activate vision
-    python -m multimedia.mfcc
-    python -m multimedia.mfcc --limit 50
-"""
 import argparse
 import csv
 import os
@@ -49,7 +24,7 @@ INDEX_FIELDS = ["track_id", "audio_path", "n_frames", "duration_s", "features_pa
 
 
 def cargar_audio(path, offset=0.0, duration=None):
-    """Señal mono a SR Hz como float32 en [-1, 1]."""
+    # mono y a SR Hz
     import librosa
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -58,11 +33,8 @@ def cargar_audio(path, offset=0.0, duration=None):
 
 
 def extraer_mfcc(path=None, y=None, offset=0.0, duration=None):
-    """Descriptores MFCC de un audio: matriz (n, 39) float32, una fila por ventana.
-
-    Se puede pasar la ruta (y opcionalmente un fragmento con offset/duration en
-    segundos) o directamente la señal y. Si el audio es más corto que una
-    ventana devuelve una matriz (0, 39)."""
+    # (n, 39), una fila por ventana
+    # se le puede pasar la ruta, un fragmento (offset/duration) o la señal y
     import librosa
     if y is None:
         y = cargar_audio(path, offset, duration)
@@ -80,7 +52,7 @@ def extraer_mfcc(path=None, y=None, offset=0.0, duration=None):
 
 
 def instante(fila):
-    """Segundo del audio en que empieza la ventana número `fila`."""
+    # segundo en que empieza la ventana
     return fila * HOP / SR
 
 
@@ -107,8 +79,7 @@ def procesar(trabajo):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="descriptores mfcc del audio (parte 4)")
     ap.add_argument("--limit", type=int, default=0, help="procesar solo las primeras N")
     ap.add_argument("--data", default=DATA)
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))

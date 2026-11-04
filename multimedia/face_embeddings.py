@@ -1,25 +1,7 @@
-"""Embeddings de cara de artistas e integrantes (extra para la Parte 5)
+# embeddings de cara (128 dims, resnet de dlib) como en el lab 11
+# usa las fotos que dejó el filtro de caras, sale en data/features/faces.npz
+# uso: python -m multimedia.face_embeddings
 
-SIFT compara patrones visuales locales: encuentra la misma imagen aunque esté
-rotada o recortada, pero no reconoce a una persona en fotos distintas. Para eso
-se usa el mismo modelo del Lab 11: la ResNet de dlib (vía face_recognition)
-convierte cada cara en un vector de 128 dimensiones donde dos fotos de la misma
-persona quedan cerca (distancia euclidiana < 0.6).
-
-Usa las fotos aceptadas por scripts/filter_artist_faces.py con kind = cara y su
-face_box, así que no vuelve a detectar caras. Guarda todo en
-data/features/faces.npz:
-    embedding  (n, 128) float32
-    path       ruta de la foto, relativa a data/
-    kind       artist | member
-    owner_id   artist_id de Deezer o member_id de MusicBrainz
-    name       nombre del artista o integrante
-Es reanudable: solo calcula las fotos que no están en el .npz.
-
-Uso:
-    conda activate vision
-    python -m multimedia.face_embeddings
-"""
 import argparse
 import os
 import time
@@ -36,7 +18,7 @@ MAX_SIDE = 1000     # a resolución completa (hasta 3000 px) es ~10 veces más l
 
 
 def fotos_con_cara(data=DATA):
-    """[(path, kind, owner_id, name, (top, right, bottom, left))]"""
+    # [(path, kind, owner_id, name, caja)]
     nombres = {r["artist_id"]: r["name"] for r in leer_csv(os.path.join(data, "artists.csv"))}
     nombres_m = {r["member_id"]: r["name"] for r in leer_csv(os.path.join(data, "members.csv"))}
     out = []
@@ -64,8 +46,7 @@ def embedding(trabajo):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="embeddings de cara de artistas e integrantes")
     ap.add_argument("--data", default=DATA)
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     args = ap.parse_args()

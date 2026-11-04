@@ -11,3 +11,7 @@ Se descarga con los scripts de `scripts/` (detalles en [`data/README.md`](data/R
 | Letra (texto y `.lrc` sincronizado) | LRCLIB |
 | Fotos extra de artistas | TheAudioDB, Wikidata + Wikimedia Commons |
 | Persona o banda, integrantes y puesto | MusicBrainz (+ Wikidata) |
+
+## Multimedia
+
+Descriptores de imágenes (SIFT) y audio (MFCC) para la Parte 4, más color de portadas y caras como extra. Detalles en [`multimedia/README.md`](multimedia/README.md)
