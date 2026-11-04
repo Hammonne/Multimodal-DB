@@ -23,9 +23,22 @@ python3 scripts/fetch_profiles.py                # una foto de perfil por artist
 | `--extra-images` | 8 | máximo de fotos de Wikimedia Commons por artista |
 | `--workers` | 6 | hilos; cada host tiene su propio límite de velocidad |
 | `--out` | `data/` | carpeta de salida |
+| `--con-letra` | 0 | en vez de `--songs`: llegar a N canciones con letra |
+| `--mas` | 3 | con `--con-letra`: canciones extra que se miran por artista |
 
 Para pasar de 1 000 a 10 000 basta con volver a correr con `--songs 10000` sobre
 la misma carpeta: no se vuelve a descargar nada.
+
+Solo 6 388 de las 10 000 tenían letra en LRCLIB, así que después se corrió
+`--con-letra 10000`: a los artistas que ya estaban se les miran más canciones
+de su top y solo entran las que tienen letra, sin artistas ni fotos nuevas.
+Las nuevas van al final de `songs.csv`, las primeras 10 000 no cambian.
+
+| | Total | Para los experimentos |
+|---|---|---|
+| Canciones (audio) | 13 643 | las primeras 10 000 filas |
+| Con letra (texto) | 10 031 | las que tienen `has_lyrics` |
+| Portadas distintas (imagen) | 10 732 | 10 000 de ellas |
 
 ## Contenido
 

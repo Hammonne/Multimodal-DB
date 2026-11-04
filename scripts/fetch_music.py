@@ -54,7 +54,7 @@ class Throttle:
 
 THROTTLES = {
     "api.deezer.com": Throttle(8),
-    "lrclib.net": Throttle(5),
+    "lrclib.net": Throttle(3),
     "www.theaudiodb.com": Throttle(0.45),
     "www.wikidata.org": Throttle(5),
     "commons.wikimedia.org": Throttle(5),
@@ -174,7 +174,7 @@ def lrclib_lyrics(artist, title, duration, max_diff=15):
     # /api/get tarda hasta 25 s cuando no tiene la letra, por eso /api/search
     # y se valida artista, título y duración, mejor si es sincronizada
     res = http_get("https://lrclib.net/api/search?" + urllib.parse.urlencode(
-        {"artist_name": artist, "track_name": title}))
+        {"artist_name": artist, "track_name": title}), retries=8)
     na, nt = norm(artist), norm(title)
     best = None
     for c in res if isinstance(res, list) else []:
@@ -341,45 +341,57 @@ def process_artist(artist, genre, out, per_artist, extra_images, done_tracks):
                   "main_image_path": main_path if images and images[0]["source"] == "deezer" else "",
                   "deezer_url": artist.get("link", "")}
 
-    # canciones
-    songs = []
-    for t in deezer_top_tracks(aid, per_artist):
-        tid = str(t["id"])
-        if tid in done_tracks or not t.get("preview"):
-            continue
-        album = t.get("album") or {}
-        audio_rel = os.path.join("audio", tid + ".mp3")
-        if not download(t["preview"], os.path.join(out, audio_rel)):
-            continue
-        cover_rel = ""
-        if real_image(album.get("cover_xl")):
-            cover_rel = os.path.join("covers", f"{album['id']}.jpg")
-            if not download(album["cover_xl"], os.path.join(out, cover_rel)):
-                cover_rel = ""
-
-        lyr = lrclib_lyrics(t["artist"]["name"], t.get("title_short") or t["title"],
-                            t.get("duration"))
-        lyrics_rel = lrc_rel = ""
-        if lyr and lyr["plain"]:
-            lyrics_rel = os.path.join("lyrics", tid + ".txt")
-            with open(os.path.join(out, lyrics_rel), "w", encoding="utf-8") as f:
-                f.write(lyr["plain"])
-        if lyr and lyr["synced"]:
-            lrc_rel = os.path.join("lyrics", tid + ".lrc")
-            with open(os.path.join(out, lrc_rel), "w", encoding="utf-8") as f:
-                f.write(lyr["synced"])
-
-        songs.append({
-            "track_id": tid, "title": t["title"], "artist_id": aid,
-            "artist": t["artist"]["name"], "album_id": album.get("id", ""),
-            "album": album.get("title", ""), "genre": genre,
-            "duration_s": t.get("duration", ""), "deezer_rank": t.get("rank", ""),
-            "explicit": t.get("explicit_lyrics", False),
-            "has_lyrics": bool(lyrics_rel), "has_synced_lyrics": bool(lrc_rel),
-            "instrumental": bool(lyr and lyr["instrumental"]),
-            "audio_path": audio_rel, "lyrics_path": lyrics_rel, "lrc_path": lrc_rel,
-            "cover_path": cover_rel, "deezer_url": t.get("link", "")})
+    songs = [s for t in deezer_top_tracks(aid, per_artist)
+             if (s := process_track(t, aid, genre, out, done_tracks))]
     return artist_row, images, songs
+
+
+def process_track(t, aid, genre, out, done_tracks, solo_letra=False):
+    # con solo_letra se busca la letra antes y si no hay no se baja nada
+    tid = str(t["id"])
+    if tid in done_tracks or not t.get("preview"):
+        return None
+    lyr = lrclib_lyrics(t["artist"]["name"], t.get("title_short") or t["title"],
+                        t.get("duration"))
+    if solo_letra and not (lyr and lyr["plain"]):
+        return None
+    album = t.get("album") or {}
+    audio_rel = os.path.join("audio", tid + ".mp3")
+    if not download(t["preview"], os.path.join(out, audio_rel)):
+        return None
+    cover_rel = ""
+    if real_image(album.get("cover_xl")):
+        cover_rel = os.path.join("covers", f"{album['id']}.jpg")
+        if not download(album["cover_xl"], os.path.join(out, cover_rel)):
+            cover_rel = ""
+
+    lyrics_rel = lrc_rel = ""
+    if lyr and lyr["plain"]:
+        lyrics_rel = os.path.join("lyrics", tid + ".txt")
+        with open(os.path.join(out, lyrics_rel), "w", encoding="utf-8") as f:
+            f.write(lyr["plain"])
+    if lyr and lyr["synced"]:
+        lrc_rel = os.path.join("lyrics", tid + ".lrc")
+        with open(os.path.join(out, lrc_rel), "w", encoding="utf-8") as f:
+            f.write(lyr["synced"])
+
+    return {
+        "track_id": tid, "title": t["title"], "artist_id": aid,
+        "artist": t["artist"]["name"], "album_id": album.get("id", ""),
+        "album": album.get("title", ""), "genre": genre,
+        "duration_s": t.get("duration", ""), "deezer_rank": t.get("rank", ""),
+        "explicit": t.get("explicit_lyrics", False),
+        "has_lyrics": bool(lyrics_rel), "has_synced_lyrics": bool(lrc_rel),
+        "instrumental": bool(lyr and lyr["instrumental"]),
+        "audio_path": audio_rel, "lyrics_path": lyrics_rel, "lrc_path": lrc_rel,
+        "cover_path": cover_rel, "deezer_url": t.get("link", "")}
+
+
+def more_tracks(arow, out, limit, done_tracks):
+    # canciones extra de un artista que ya está, sin volver a bajar sus fotos
+    return [s for t in deezer_top_tracks(arow["artist_id"], limit)
+            if (s := process_track(t, arow["artist_id"], arow["genre"], out,
+                                   done_tracks, solo_letra=True))]
 
 
 def main():
@@ -389,6 +401,10 @@ def main():
     ap.add_argument("--extra-images", type=int, default=8,
                     help="máximo de fotos de Wikimedia Commons por artista")
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--con-letra", type=int, default=0,
+                    help="en vez de --songs: llegar a N canciones con letra usando los artistas que ya están")
+    ap.add_argument("--mas", type=int, default=3,
+                    help="con --con-letra: canciones extra que se miran por artista")
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument("--out", default=os.path.join(repo, "data"))
     args = ap.parse_args()
@@ -399,7 +415,7 @@ def main():
     with open(lock, "w") as f:
         f.write(str(os.getpid()))
     try:
-        run(args, out)
+        run_con_letra(args, out) if args.con_letra else run(args, out)
     finally:
         os.remove(lock)
 
@@ -493,6 +509,58 @@ def run(args, out):
     n_lyr = sum(1 for s in songs if str(s["has_lyrics"]) == "True")
     print(f"\nListo: {len(songs)} canciones ({n_lyr} con letra), "
           f"{len(artists)} artistas, {len(images)} fotos de artistas en {out}")
+
+
+def con_letra(songs):
+    return sum(1 for s in songs if str(s["has_lyrics"]) == "True")
+
+
+def agregar(songs, done_tracks, nuevas):
+    for s in nuevas:
+        if s["track_id"] not in done_tracks:
+            done_tracks.add(s["track_id"])
+            songs.append(s)
+
+
+def run_con_letra(args, out):
+    # las canciones nuevas van al final de songs.csv, las primeras 10000 no cambian
+    songs_csv = os.path.join(out, "songs.csv")
+    songs = load_csv(songs_csv)
+    artists = load_csv(os.path.join(out, "artists.csv"))
+    done_tracks = {s["track_id"] for s in songs}
+    n_artista = Counter(s["artist_id"] for s in songs)
+    print(f"Retomando: {len(songs)} canciones, {con_letra(songs)} con letra")
+
+    # artistas con menos canciones primero, así se reparte
+    random.seed(42)
+    random.shuffle(artists)
+    artists.sort(key=lambda a: n_artista[a["artist_id"]])
+    last_save = time.time()
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        pending = set()
+        it = iter(artists)
+        while con_letra(songs) < args.con_letra:
+            while len(pending) < args.workers * 2:
+                a = next(it, None)
+                if a is None:
+                    break
+                limit = n_artista[a["artist_id"]] + args.mas
+                pending.add(pool.submit(more_tracks, a, out, limit, set(done_tracks)))
+            if not pending:
+                print("No quedan artistas, subir --mas y volver a correr")
+                break
+            f = next(as_completed(pending))
+            pending.remove(f)
+            agregar(songs, done_tracks, f.result())
+            print(f"[{con_letra(songs):>6}/{args.con_letra}] {len(songs)} canciones")
+            if time.time() - last_save > 30:
+                write_csv(songs_csv, SONG_FIELDS, songs)
+                last_save = time.time()
+        # los que ya estaban bajando también se guardan, si no quedan mp3 sueltos
+        for f in as_completed(pending):
+            agregar(songs, done_tracks, f.result())
+    write_csv(songs_csv, SONG_FIELDS, songs)
+    print(f"\nListo: {len(songs)} canciones, {con_letra(songs)} con letra")
 
 
 if __name__ == "__main__":
