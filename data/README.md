@@ -10,6 +10,7 @@ python3 scripts/fetch_music.py --songs 1000      # canciones, portadas, fotos
 python3 scripts/fetch_members.py                 # persona o banda, integrantes
 conda activate vision                            # entorno con face_recognition
 python scripts/filter_artist_faces.py --delete   # deja solo fotos de caras
+python3 scripts/fetch_profiles.py                # una foto de perfil por artista
 ```
 
 `fetch_music.py` y `fetch_members.py` pueden correr a la vez; el filtro con
@@ -47,6 +48,7 @@ data/
 ├── lyrics/<track_id>.lrc         letra sincronizada (si existe)
 ├── covers/<album_id>.jpg         portada del álbum (1000×1000)
 └── artists/<nombre>_<artist_id>/   p. ej. artists/bad-bunny_8355/
+    ├── profile.jpg               foto de perfil para la interfaz
     ├── main.jpg                  foto principal (Deezer)
     └── extra_NN.jpg|png          fotos adicionales (TheAudioDB, Commons)
 └── members/<nombre>_<id>/        integrante de una banda
@@ -80,6 +82,16 @@ lyrics_path, lrc_path, cover_path, deezer_url`
 su fuente (`deezer`, `theaudiodb`, `wikimedia_commons`), licencia, autor y
 página de origen cuando la fuente los publica (Commons sí; Deezer y TheAudioDB
 no).
+
+### artist_profiles.csv
+
+`artist_id, name, profile_path, source`: la imagen que muestra la interfaz
+para cada artista, independiente del filtro de caras (que puede haber borrado
+todas sus fotos). `source` dice de dónde sale: `deezer` (la foto oficial,
+aunque sea un logo; se descarta la silueta gris genérica), `foto` (una que
+pasó el filtro) o `portada` (la de su canción más popular). Todos los
+artistas con canciones tienen perfil; `profile.jpg` no está en
+`artist_images.csv`, así que no se usa para buscar por cara.
 
 ### artist_types.csv
 
