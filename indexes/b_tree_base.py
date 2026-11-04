@@ -1,0 +1,322 @@
+import struct
+
+from indexes.b_tree_leaf_page import PAGE_SIZE, NULL_LEAF, BTreeLeafPage
+from indexes.b_tree_internal_page import BTreeInternalPage
+from storage.file_manager import FileManager
+from storage.buffer_manager import BufferManager
+
+ROOT_HEADER_FORMAT = ">I?B"
+ROOT_HEADER_SIZE = struct.calcsize(ROOT_HEADER_FORMAT)
+
+
+class BPlusTreeBase:
+
+    def __init__(self, index_filename: str, buffer_frames: int = 50):
+
+        self.index_filename = index_filename
+        self.file_manager = FileManager(index_filename, PAGE_SIZE, ROOT_HEADER_SIZE)
+        self.buffer_manager = BufferManager(self.file_manager, buffer_frames)
+
+        is_new = len(self.file_manager.read_header()) < ROOT_HEADER_SIZE
+
+        if is_new:
+            self._init_empty_index()
+        else:
+            self._load_root_header()
+
+    def _init_empty_index(self):
+        self.buffer_manager.invalidate_all(self.file_manager)
+        self.file_manager.truncate(self.file_manager.file_header_size)
+
+        root_page_id = self.file_manager.allocate_page()
+        root_leaf = BTreeLeafPage(root_page_id)
+        self._save_page(root_leaf)
+
+        self.root_page_id = root_page_id
+        self.root_is_leaf = True
+        self.height = 0
+        self._save_root_header()
+
+    def _load_root_header(self):
+        header = self.file_manager.read_header()
+        self.root_page_id, self.root_is_leaf, self.height = struct.unpack(ROOT_HEADER_FORMAT, header)
+
+    def _save_root_header(self):
+        header = struct.pack(ROOT_HEADER_FORMAT, self.root_page_id, self.root_is_leaf, self.height)
+        self.file_manager.write_header(header)
+
+    def _load_leaf(self, page_id: int) -> BTreeLeafPage:
+        data = self.buffer_manager.fetch_page(page_id, self.file_manager)
+        self.buffer_manager.unpin_page(page_id, self.file_manager)
+        return BTreeLeafPage(page_id, data=data)
+
+    def _load_internal(self, page_id: int) -> BTreeInternalPage:
+        data = self.buffer_manager.fetch_page(page_id, self.file_manager)
+        self.buffer_manager.unpin_page(page_id, self.file_manager)
+        return BTreeInternalPage(page_id, data=data)
+
+    def _save_page(self, page) -> None:
+        buf = self.buffer_manager.fetch_page(page.page_id, self.file_manager)
+        buf[:] = page.data
+        self.buffer_manager.mark_dirty(page.page_id, self.file_manager)
+        self.buffer_manager.unpin_page(page.page_id, self.file_manager)
+
+    def _allocate_page_id(self) -> int:
+        return self.file_manager.allocate_page()
+
+    def _store_record(self, params):
+        raise NotImplementedError
+
+    def _fetch_record(self, ref):
+        raise NotImplementedError
+
+    def _delete_record(self, key, ref) -> bool:
+        raise NotImplementedError
+
+    def search(self, key):
+        page_id = self.root_page_id
+        depth = self.height
+        while depth > 0:
+            node = self._load_internal(page_id)
+            page_id = node.find_child(key)
+            depth -= 1
+
+        leaf = self._load_leaf(page_id)
+        return leaf.find(key)
+
+    def insert(self, key, params):
+        ref = self._store_record(params)
+        return self._insert_ref(key, ref)
+
+    def _insert_ref(self, key, ref):
+        path = []
+        page_id = self.root_page_id
+        depth = self.height
+        while depth > 0:
+            node = self._load_internal(page_id)
+            path.append(node)
+            page_id = node.find_child(key)
+            depth -= 1
+
+        leaf = self._load_leaf(page_id)
+
+        if leaf.insert(key, ref):
+            self._save_page(leaf)
+            return ref
+
+        new_leaf_id = self._allocate_page_id()
+        split_key, new_leaf = leaf.split(new_leaf_id)
+
+        if key < split_key:
+            leaf.insert(key, ref)
+        else:
+            new_leaf.insert(key, ref)
+
+        self._save_page(leaf)
+        self._save_page(new_leaf)
+
+        self._propagate_split(path, split_key, new_leaf_id)
+        return ref
+
+    def _propagate_split(self, path, split_key, right_page_id):
+        if not path:
+            new_root_id = self._allocate_page_id()
+            new_root = BTreeInternalPage(new_root_id)
+            new_root.init_as_root(self.root_page_id, split_key, right_page_id)
+            self._save_page(new_root)
+
+            self.root_page_id = new_root_id
+            self.root_is_leaf = False
+            self.height += 1
+            self._save_root_header()
+            return
+
+        parent = path.pop()
+        if parent.insert_key(split_key, right_page_id):
+            self._save_page(parent)
+            return
+
+        new_parent_id = self._allocate_page_id()
+        pushed_up_key, new_parent = parent.split(new_parent_id)
+
+        if split_key < pushed_up_key:
+            parent.insert_key(split_key, right_page_id)
+        else:
+            new_parent.insert_key(split_key, right_page_id)
+
+        self._save_page(parent)
+        self._save_page(new_parent)
+
+        self._propagate_split(path, pushed_up_key, new_parent_id)
+
+    def delete(self, key) -> bool:
+        path = []
+        page_id = self.root_page_id
+        depth = self.height
+        while depth > 0:
+            node = self._load_internal(page_id)
+            child_index = node.find_child_index(key)
+            path.append((node, child_index))
+            page_id = node._read_child(child_index)
+            depth -= 1
+
+        leaf = self._load_leaf(page_id)
+        ref = leaf.find(key)
+        if ref is None:
+            return False
+
+        leaf.delete(key)
+        self._delete_record(key, ref)
+
+        if not path or not leaf.is_underflow():
+            self._save_page(leaf)
+            return True
+
+        self._save_page(leaf)
+        self._rebalance_leaf(leaf, path)
+        return True
+
+    def _rebalance_leaf(self, leaf, path):
+        parent, child_index = path[-1]
+
+        if child_index > 0:
+            left_sibling = self._load_leaf(parent._read_child(child_index - 1))
+            if left_sibling.can_lend():
+                new_separator = leaf.borrow_from_left(left_sibling)
+                parent._write_key(child_index - 1, new_separator)
+                self._save_page(left_sibling)
+                self._save_page(leaf)
+                self._save_page(parent)
+                return
+
+        if child_index < parent.n_keys:
+            right_sibling = self._load_leaf(parent._read_child(child_index + 1))
+            if right_sibling.can_lend():
+                new_separator = leaf.borrow_from_right(right_sibling)
+                parent._write_key(child_index, new_separator)
+                self._save_page(leaf)
+                self._save_page(right_sibling)
+                self._save_page(parent)
+                return
+
+        if child_index > 0:
+            left_sibling = self._load_leaf(parent._read_child(child_index - 1))
+            left_sibling.merge_with_right(leaf)
+            self._save_page(left_sibling)
+            parent.delete_key_at(child_index - 1)
+        else:
+            right_sibling = self._load_leaf(parent._read_child(child_index + 1))
+            leaf.merge_with_right(right_sibling)
+            self._save_page(leaf)
+            parent.delete_key_at(child_index)
+
+        self._save_page(parent)
+
+        if parent.is_underflow():
+            self._rebalance_internal(parent, path[:-1])
+
+    def _rebalance_internal(self, node, path):
+        if not path:
+            if node.n_keys == 0:
+                self.root_is_leaf = (self.height == 1)
+                self.root_page_id = node._read_child(0)
+                self.height -= 1
+                self._save_root_header()
+            else:
+                self._save_page(node)
+            return
+
+        parent, child_index = path[-1]
+
+        if child_index > 0:
+            left_sibling = self._load_internal(parent._read_child(child_index - 1))
+            if left_sibling.can_lend():
+                separator = parent._read_key(child_index - 1)
+                new_separator = node.borrow_from_left(left_sibling, separator)
+                parent._write_key(child_index - 1, new_separator)
+                self._save_page(left_sibling)
+                self._save_page(node)
+                self._save_page(parent)
+                return
+
+        if child_index < parent.n_keys:
+            right_sibling = self._load_internal(parent._read_child(child_index + 1))
+            if right_sibling.can_lend():
+                separator = parent._read_key(child_index)
+                new_separator = node.borrow_from_right(right_sibling, separator)
+                parent._write_key(child_index, new_separator)
+                self._save_page(node)
+                self._save_page(right_sibling)
+                self._save_page(parent)
+                return
+
+        if child_index > 0:
+            left_sibling = self._load_internal(parent._read_child(child_index - 1))
+            separator = parent._read_key(child_index - 1)
+            left_sibling.merge_with_right(node, separator)
+            self._save_page(left_sibling)
+            parent.delete_key_at(child_index - 1)
+        else:
+            right_sibling = self._load_internal(parent._read_child(child_index + 1))
+            separator = parent._read_key(child_index)
+            node.merge_with_right(right_sibling, separator)
+            self._save_page(node)
+            parent.delete_key_at(child_index)
+
+        self._save_page(parent)
+
+        if parent.is_underflow():
+            self._rebalance_internal(parent, path[:-1])
+
+    def range_search(self, start_key, end_key):
+        page_id = self.root_page_id
+        depth = self.height
+        while depth > 0:
+            node = self._load_internal(page_id)
+            page_id = node.find_leftmost_child(start_key)
+            depth -= 1
+
+        leaf = self._load_leaf(page_id)
+        results = []
+
+        while leaf is not None:
+            for i in range(leaf.n_entries):
+                entry_key, ref = leaf._read_entry(i)
+                if entry_key > end_key:
+                    return results
+                if entry_key >= start_key:
+                    results.append((entry_key, ref))
+
+            leaf = self._load_leaf(leaf.next_leaf_id) if leaf.next_leaf_id != NULL_LEAF else None
+
+        return results
+
+    def iter_ordered(self, reverse=False):
+        """
+        Itera las entradas del B+ en orden de clave.
+        La iteración es lazy y no materializa todas las entradas.
+        """
+        yield from self._iter_ordered_page(self.root_page_id, self.height, reverse)
+
+
+    def _iter_ordered_page(self, page_id, depth, reverse):
+        """
+        Recorre un subárbol del B+ en orden.
+        depth == 0 significa que page_id es una hoja.
+        """
+        if depth == 0:
+            leaf = self._load_leaf(page_id)
+            if reverse:
+                indices = range(leaf.n_entries - 1, -1, -1)
+            else:
+                indices = range(leaf.n_entries)
+            for i in indices:
+                yield leaf._read_entry(i)
+            return
+        node = self._load_internal(page_id)
+        children = node._all_children()
+        if reverse:
+            children = reversed(children)
+        for child_page_id in children:
+            yield from self._iter_ordered_page(child_page_id, depth - 1, reverse)
+

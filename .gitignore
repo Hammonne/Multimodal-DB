@@ -6,3 +6,10 @@ data/*
 __pycache__/
 *.pyc
 .DS_Store
+
+*.bin
+*.dat
+*.idx
+chuta_wal.log
+typst/
+.idea

@@ -1,0 +1,528 @@
+"""
+Pruebas del executor con indices (B+ agrupado, B+ no agrupado y HASH) y
+algoritmos externos (External Sort / External Hash) conectados al parser.
+PYTHONPATH=. python3 tests/table/test_executor_avanzado.py  (o run_all_tests.py)
+"""
+
+import os
+import sys
+
+from parser.scanner import Scanner
+from parser import Parser
+from storage.storage_manager import StorageManager
+from parser.executor import ExecuteVisitor, ExecutionError
+
+ARCHIVOS = [
+    "sys_tables.dat", "sys_columns.dat", "sys_indexes.dat",
+    "ventas.dat", "emp.dat", "dept.dat", "ref.dat",
+
+    "idx_ventas_monto_unclustered.idx", "idx_emp_id_clustered.idx", "idx_ventas_id_unclustered.idx",
+    "idx_ref_monto_unclustered.idx",
+]
+
+
+def limpiar():
+    for f in ARCHIVOS:
+        if os.path.exists(f):
+            os.remove(f)
+
+
+def correr(sm, sql):
+    programa = Parser(Scanner(sql)).parse_p()
+    return ExecuteVisitor(sm).ejecutar(programa)
+
+
+def _prohibir_scan(tabla):
+    """Intercambia tabla.scan por una bomba que cuenta las llamadas:
+    si una consulta con indice llega a barrer la tabla, el test
+    directamente revienta en vez de pasar por alto."""
+    llamadas = {"n": 0}
+
+    def bomba():
+        llamadas["n"] += 1
+        raise AssertionError("la consulta barrio la tabla en vez de usar el indice")
+
+    original = tabla.scan
+    tabla.scan = bomba
+    return llamadas, original
+
+
+def test_select_usa_indice_unclustered():
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 'Ana', 100.0);")
+    correr(sm, "INSERT INTO ventas VALUES (2, 'Beto', 250.0);")
+    correr(sm, "INSERT INTO ventas VALUES (3, 'Carlos', 300.0);")
+    correr(sm, "CREATE INDEX ON ventas (monto) USING BTREE;")
+
+    tabla = sm.open_table("ventas")
+    assert tabla.secondary_indexes.get(2), "el indice no quedo enlazado a la columna monto"
+    assert tabla.clustered_index is None
+
+    llamadas, original = _prohibir_scan(tabla)
+    try:
+        res = correr(sm, "SELECT cliente FROM ventas WHERE monto = 250.0;")[0]
+        assert res.filas == [["Beto"]]
+
+        res = correr(sm, "SELECT cliente FROM ventas WHERE monto BETWEEN 100 AND 300;")[0]
+        assert sorted(f[0] for f in res.filas) == ["Ana", "Beto", "Carlos"]
+
+        res = correr(sm, "SELECT cliente FROM ventas WHERE monto >= 300;")[0]
+        assert res.filas == [["Carlos"]]
+    finally:
+        tabla.scan = original
+    assert llamadas["n"] == 0, f"el indice debia servir la consulta, el scan se llamo {llamadas['n']} veces"
+
+    sm.close()
+    limpiar()
+    print("test_select_usa_indice_unclustered: OK")
+
+
+def test_select_usa_indice_clustered():
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE emp (id INT PRIMARY KEY, nombre VARCHAR(20)) USING SEQUENTIAL;")
+    correr(sm, "INSERT INTO emp VALUES (3, 'Zoe');")
+    correr(sm, "INSERT INTO emp VALUES (1, 'Ana');")
+    correr(sm, "INSERT INTO emp VALUES (2, 'Bob');")
+    correr(sm, "CREATE INDEX ON emp (id) USING BTREE CLUSTERED;")
+
+    tabla = sm.open_table("emp")
+    assert tabla.clustered_index is not None, "el indice agrupado no quedo enlazado"
+
+    llamadas, original = _prohibir_scan(tabla)
+    try:
+        res = correr(sm, "SELECT nombre FROM emp WHERE id = 2;")[0]
+        assert res.filas == [["Bob"]]
+
+        res = correr(sm, "SELECT nombre FROM emp WHERE id BETWEEN 1 AND 3;")[0]
+        assert sorted(f[0] for f in res.filas) == ["Ana", "Bob", "Zoe"]
+    finally:
+        tabla.scan = original
+    assert llamadas["n"] == 0, f"el indice agrupado debia servir la consulta, scan: {llamadas['n']}"
+
+    sm.close()
+    limpiar()
+    print("test_select_usa_indice_clustered: OK")
+
+
+def test_indice_poblado_con_registros_existentes():
+    """CREATE INDEX sobre una tabla que ya tiene datos debe indexarlos."""
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 'Ana', 100.0);")
+    correr(sm, "INSERT INTO ventas VALUES (2, 'Beto', 250.0);")
+    correr(sm, "INSERT INTO ventas VALUES (3, 'Carlos', 250.0);")
+    correr(sm, "CREATE INDEX ON ventas (monto) USING BTREE;")
+
+    # monto=250.0 tiene dos filas: ambas deben aparecer via el indice
+    res = correr(sm, "SELECT cliente FROM ventas WHERE monto = 250.0;")[0]
+    assert sorted(f[0] for f in res.filas) == ["Beto", "Carlos"]
+
+    sm.close()
+    limpiar()
+    print("test_indice_poblado_con_registros_existentes: OK")
+
+
+def test_indices_persisten_y_mantienen_el_crud():
+    """Los indices deben sobrevivir al cierre de la base y seguir al dia
+    con INSERT y DELETE hechos por SQL en la sesion siguiente."""
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 'Ana', 100.0);")
+    correr(sm, "INSERT INTO ventas VALUES (2, 'Beto', 250.0);")
+    correr(sm, "CREATE INDEX ON ventas (monto) USING BTREE;")
+
+    correr(sm, "CREATE TABLE emp (id INT PRIMARY KEY, nombre VARCHAR(20)) USING SEQUENTIAL;")
+    correr(sm, "INSERT INTO emp VALUES (3, 'Zoe');")
+    correr(sm, "INSERT INTO emp VALUES (1, 'Ana');")
+    correr(sm, "CREATE INDEX ON emp (id) USING BTREE CLUSTERED;")
+    sm.close()
+
+    sm2 = StorageManager()
+    tabla = sm2.open_table("ventas")
+    assert tabla.secondary_indexes.get(2), "el indice no agrupado no se recargo del catalogo"
+    assert sm2.open_table("emp").clustered_index is not None, "el indice agrupado no se recargo del catalogo"
+
+    res = correr(sm2, "SELECT cliente FROM ventas WHERE monto = 250.0;")[0]
+    assert res.filas == [["Beto"]]
+    res = correr(sm2, "SELECT nombre FROM emp WHERE id = 3;")[0]
+    assert res.filas == [["Zoe"]]
+
+    # INSERT post-reapertura: el indice debe ver la fila nueva
+    correr(sm2, "INSERT INTO ventas VALUES (4, 'Dani', 250.0);")
+    res = correr(sm2, "SELECT cliente FROM ventas WHERE monto = 250.0;")[0]
+    assert sorted(f[0] for f in res.filas) == ["Beto", "Dani"]
+
+    # DELETE post-reapertura: el indice debe dejar de ver la fila borrada
+    correr(sm2, "DELETE FROM ventas WHERE id = 4;")
+    res = correr(sm2, "SELECT cliente FROM ventas WHERE monto = 250.0;")[0]
+    assert res.filas == [["Beto"]]
+
+    sm2.close()
+    limpiar()
+    print("test_indices_persisten_y_mantienen_el_crud: OK")
+
+
+def test_join_y_groupby_y_orderby_por_sql():
+    """JOIN (Grace Hash Join), GROUP BY + agregados (hash aggregate) y
+    ORDER BY (k-way merge) deben resolver consultas SQL correctamente."""
+    limpiar()
+    sm = StorageManager()
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 'Ana', 100.0);")
+    correr(sm, "INSERT INTO ventas VALUES (2, 'Beto', 250.0);")
+    correr(sm, "INSERT INTO ventas VALUES (3, 'Carlos', 300.0);")
+
+    correr(sm, "CREATE TABLE dept (id INT PRIMARY KEY, d VARCHAR(20)) USING HEAP;")
+    correr(sm, "INSERT INTO dept VALUES (1, 'IA');")
+    correr(sm, "INSERT INTO dept VALUES (2, 'DB');")
+
+    # JOIN (equi-join por id)
+    res = correr(sm, "SELECT ventas.cliente, dept.d FROM ventas JOIN dept ON ventas.id = dept.id;")[0]
+    assert sorted(map(tuple, res.filas)) == [("Ana", "IA"), ("Beto", "DB")]
+
+    # JOIN + WHERE
+    res = correr(sm, "SELECT ventas.cliente FROM ventas JOIN dept ON ventas.id = dept.id WHERE ventas.monto > 150.0;")[0]
+    assert res.filas == [["Beto"]]
+
+    # JOIN + ORDER BY (sorter externo sobre el registro combinado).
+    # El join tiene 2 filas (Ana/IA y Beto/DB); DESC por monto => Beto ante Ana.
+    res = correr(sm, "SELECT ventas.cliente FROM ventas JOIN dept ON ventas.id = dept.id ORDER BY ventas.monto DESC;")[0]
+    assert res.filas == [["Beto"], ["Ana"]]
+
+    # GROUP BY + agregados contra la clave de grupo
+    res = correr(sm, "SELECT id, count(*) FROM dept GROUP BY id;")[0]
+    assert sorted(map(tuple, res.filas)) == [(1, 1), (2, 1)]
+
+    res = correr(sm, "SELECT monto, count(*) FROM ventas GROUP BY monto;")[0]
+    assert res.columnas == ["monto", "count(*)"]
+    assert sorted(map(tuple, res.filas)) == [(100.0, 1), (250.0, 1), (300.0, 1)]
+
+    # agregacion global (sin GROUP BY)
+    res = correr(sm, "SELECT count(*), sum(monto) FROM ventas;")[0]
+    assert res.filas[0][0] == 3
+    assert res.filas[0][1] == 650.0
+
+    # ORDER BY simple (sorter externo, descendente)
+    res = correr(sm, "SELECT cliente FROM ventas ORDER BY monto DESC;")[0]
+    assert res.filas == [["Carlos"], ["Beto"], ["Ana"]]
+
+    # ORDER BY del resultado de una agregacion (materializado, en RAM)
+    res = correr(sm, "SELECT monto, count(*) FROM ventas GROUP BY monto ORDER BY monto DESC;")[0]
+    assert [f[0] for f in res.filas] == [300.0, 250.0, 100.0]
+
+    sm.close()
+    limpiar()
+    print("test_join_y_groupby_y_orderby_por_sql: OK")
+
+
+def test_create_index_rechaza_usos_invalidos():
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 100.0);")
+    correr(sm, "CREATE TABLE emp (id INT PRIMARY KEY, nombre VARCHAR(20)) USING SEQUENTIAL;")
+    correr(sm, "INSERT INTO emp VALUES (1, 'Ana');")
+
+    try:
+        correr(sm, "CREATE INDEX ON emp (nombre) USING HASH;")
+        assert False, "un indice HASH (no agrupado) sobre una tabla sequential debia fallar"
+    except ExecutionError as e:
+        assert "HEAP" in str(e)
+
+    try:
+        correr(sm, "CREATE INDEX ON ventas (id) USING BTREE CLUSTERED;")
+        assert False, "CLUSTERED sobre una tabla heap debia fallar"
+    except ExecutionError as e:
+        assert "SEQUENTIAL" in str(e)
+
+    # Un B+ no agrupado SI se acepta sobre una tabla sequential: lo respalda
+    # BPlusTreeUnclusteredSequential, que se reconstruye cuando el archivo se
+    # reorganiza. Antes esta combinacion se rechazaba.
+    res = correr(sm, "CREATE INDEX ON emp (nombre) USING BTREE;")[0]
+    assert "no agrupado" in res.mensaje
+
+    sm.close()
+    limpiar()
+    print("test_create_index_rechaza_usos_invalidos: OK")
+
+
+def test_select_usa_indice_unclustered_sobre_sequential():
+    # Mismo contrato que test_select_usa_indice_unclustered, pero la tabla es
+    # SEQUENTIAL: el B+ no agrupado debe servir igual la igualdad y el rango,
+    # apoyandose en BPlusTreeUnclusteredSequential.
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas_seq (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING SEQUENTIAL;")
+    for i, (cli, monto) in enumerate(
+        [("Ana", 100.0), ("Beto", 250.0), ("Carlos", 300.0)], start=1
+    ):
+        correr(sm, f"INSERT INTO ventas_seq VALUES ({i}, '{cli}', {monto});")
+    correr(sm, "CREATE INDEX ON ventas_seq (monto) USING BTREE;")
+
+    tabla = sm.open_table("ventas_seq")
+    assert tabla.secondary_indexes.get(2), "el indice no quedo enlazado a la columna monto"
+    assert tabla.clustered_index is None
+
+    llamadas, original = _prohibir_scan(tabla)
+    try:
+        res = correr(sm, "SELECT cliente FROM ventas_seq WHERE monto = 250.0;")[0]
+        assert res.filas == [["Beto"]]
+
+        res = correr(sm, "SELECT cliente FROM ventas_seq WHERE monto BETWEEN 100 AND 300;")[0]
+        assert sorted(f[0] for f in res.filas) == ["Ana", "Beto", "Carlos"]
+
+        res = correr(sm, "SELECT cliente FROM ventas_seq WHERE monto >= 300;")[0]
+        assert res.filas == [["Carlos"]]
+    finally:
+        tabla.scan = original
+    assert llamadas["n"] == 0, f"el indice debia servir la consulta, el scan se llamo {llamadas['n']} veces"
+
+    sm.close()
+    limpiar()
+    print("test_select_usa_indice_unclustered_sobre_sequential: OK")
+
+
+def test_select_usa_indice_hash():
+    """SELECT por igualdad sobre una columna con indice HASH debe resolver
+    via el indice (0 scaneos de la tabla) y devolver bien las filas; un
+    rango sobre esa misma columna NO usa el hash (no responde rangos) y
+    cae al scan, pero devuelve filas correctas."""
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 'Ana', 100.0);")
+    correr(sm, "INSERT INTO ventas VALUES (2, 'Beto', 250.0);")
+    correr(sm, "INSERT INTO ventas VALUES (3, 'Carlos', 300.0);")
+    correr(sm, "CREATE INDEX ON ventas (monto) USING HASH;")
+
+    tabla = sm.open_table("ventas")
+
+    llamadas, original = _prohibir_scan(tabla)
+    try:
+        res = correr(sm, "SELECT cliente FROM ventas WHERE monto = 250.0;")[0]
+        assert res.filas == [["Beto"]]
+    finally:
+        tabla.scan = original
+    assert llamadas["n"] == 0, f"el indice hash debia servir la consulta, scan: {llamadas['n']}"
+
+    # punto que no existe: el indice responde vacio sin barrer la tabla
+    llamadas, original = _prohibir_scan(tabla)
+    try:
+        res = correr(sm, "SELECT cliente FROM ventas WHERE monto = 999.0;")[0]
+        assert res.filas == []
+    finally:
+        tabla.scan = original
+    assert llamadas["n"] == 0, f"el indice hash debia responder vacio, scan: {llamadas['n']}"
+
+    # rango sobre columna hash: no hay plan con indice, se barre la tabla
+    res = correr(sm, "SELECT cliente FROM ventas WHERE monto BETWEEN 100 AND 300;")[0]
+    assert sorted(f[0] for f in res.filas) == ["Ana", "Beto", "Carlos"]
+
+    sm.close()
+    limpiar()
+    print("test_select_usa_indice_hash: OK")
+
+
+def test_indice_hash_poblado_con_registros_existentes():
+    """CREATE INDEX ... USING HASH sobre datos ya insertados debe
+    indexarlos, incluidas las filas con el mismo valor."""
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 'Ana', 250.0);")
+    correr(sm, "INSERT INTO ventas VALUES (2, 'Beto', 250.0);")
+    correr(sm, "INSERT INTO ventas VALUES (3, 'Carlos', 100.0);")
+    correr(sm, "CREATE INDEX ON ventas (monto) USING HASH;")
+
+    # monto=250.0 tiene dos filas: ambas deben aparecer via el indice
+    res = correr(sm, "SELECT cliente FROM ventas WHERE monto = 250.0;")[0]
+    assert sorted(f[0] for f in res.filas) == ["Ana", "Beto"]
+
+    sm.close()
+    limpiar()
+    print("test_indice_hash_poblado_con_registros_existentes: OK")
+
+
+def test_indice_hash_persiste_y_mantiene_el_crud():
+    """El indice hash no persiste sus paginas (se rearma desde la tabla al
+    abrir la base), pero el catalogo si recuerda que existe y debe seguir
+    al dia con INSERT y DELETE hechos por SQL en la sesion siguiente."""
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 'Ana', 100.0);")
+    correr(sm, "INSERT INTO ventas VALUES (2, 'Beto', 250.0);")
+    correr(sm, "CREATE INDEX ON ventas (monto) USING HASH;")
+    sm.close()
+
+    sm2 = StorageManager()
+    tabla = sm2.open_table("ventas")
+    assert tabla.secondary_indexes.get(2), "el indice hash no se recargo del catalogo"
+
+    res = correr(sm2, "SELECT cliente FROM ventas WHERE monto = 100.0;")[0]
+    assert res.filas == [["Ana"]]
+
+    # INSERT post-reapertura: el indice debe ver la fila nueva
+    correr(sm2, "INSERT INTO ventas VALUES (3, 'Carlos', 100.0);")
+    res = correr(sm2, "SELECT cliente FROM ventas WHERE monto = 100.0;")[0]
+    assert sorted(f[0] for f in res.filas) == ["Ana", "Carlos"]
+
+    # DELETE post-reapertura: el indice debe dejar de ver la fila borrada
+    correr(sm2, "DELETE FROM ventas WHERE id = 3;")
+    res = correr(sm2, "SELECT cliente FROM ventas WHERE monto = 100.0;")[0]
+    assert res.filas == [["Ana"]]
+
+    sm2.close()
+    limpiar()
+    print("test_indice_hash_persiste_y_mantiene_el_crud: OK")
+
+
+def test_order_by_usa_indice_en_asc_y_desc():
+    limpiar()
+    sm = StorageManager()
+
+    # ventas lleva indice B+ sobre monto; ref es el mismo dataset SIN indice,
+    # para comparar el recorrido del indice contra el ExternalSort.
+    # Los montos son todos distintos: con empates el orden no seria univoco.
+    datos = [(1, "Ana", 300.0), (2, "Beto", 100.0), (3, "Carlos", 250.0),
+             (4, "Dani", 200.0), (5, "Eva", 50.0)]
+
+    for nombre in ("ventas", "ref"):
+        correr(sm, f"CREATE TABLE {nombre} (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+        for i, c, m in datos:
+            correr(sm, f"INSERT INTO {nombre} VALUES ({i}, '{c}', {m});")
+
+    correr(sm, "CREATE INDEX ON ventas (monto) USING BTREE;")
+
+    tabla = sm.open_table("ventas")
+    assert tabla.secondary_indexes.get(2), "el indice no quedo enlazado a la columna monto"
+
+    llamadas, original = _prohibir_scan(tabla)
+    try:
+        for direccion in ("ASC", "DESC"):
+            con_indice = correr(sm, f"SELECT cliente FROM ventas ORDER BY monto {direccion};")[0]
+            sin_indice = correr(sm, f"SELECT cliente FROM ref ORDER BY monto {direccion};")[0]
+
+            esperado = [c for _, c, _ in sorted(datos, key=lambda f: f[2],
+                                                reverse=direccion == "DESC")]
+
+            assert con_indice.filas == [[c] for c in esperado], \
+                f"{direccion} por indice: {con_indice.filas} != {esperado}"
+            assert [f[0] for f in sin_indice.filas] == esperado, \
+                f"{direccion} por ExternalSort: {sin_indice.filas} != {esperado}"
+
+            # el recorrido por indice tiene que ser equivalente al ExternalSort
+            assert con_indice.filas == sin_indice.filas, \
+                f"{direccion}: el indice y el ExternalSort discrepan"
+
+            nodos = [p["node"] for p in con_indice.plan]
+            assert "INDEX SCAN" in nodos, f"{direccion} no uso el indice: {con_indice.plan}"
+            assert "EXTERNAL SORT" not in nodos, f"{direccion} uso ExternalSort con indice: {con_indice.plan}"
+
+            # sin indice debe seguir cayendo en ExternalSort
+            assert "EXTERNAL SORT" in [p["node"] for p in sin_indice.plan], \
+                f"{direccion} sin indice no uso ExternalSort: {sin_indice.plan}"
+
+        # WHERE sobre el recorrido descendente: el filtro se aplica durante
+        # el recorrido, asi que no debe traer filas de la mitad alta del rango.
+        res = correr(sm, "SELECT cliente FROM ventas WHERE monto <= 250.0 ORDER BY monto DESC;")[0]
+        assert res.filas == [["Carlos"], ["Dani"], ["Beto"], ["Eva"]], res.filas
+    finally:
+        tabla.scan = original
+    assert llamadas["n"] == 0, f"el indice debia servir la consulta, el scan se llamo {llamadas['n']} veces"
+
+    # Una fila borrada no puede reaparecer en el recorrido por indice.
+    # (el DELETE si usa tabla.scan, asi que va fuera de la bomba)
+    # ref es la tabla de control y no se toca: debe seguir con sus 5 filas.
+    correr(sm, "DELETE FROM ventas WHERE id = 2;")
+    res = correr(sm, "SELECT cliente FROM ventas ORDER BY monto DESC;")[0]
+    assert res.filas == [["Ana"], ["Carlos"], ["Dani"], ["Eva"]], res.filas
+    res = correr(sm, "SELECT cliente FROM ref ORDER BY monto DESC;")[0]
+    assert res.filas == [["Ana"], ["Carlos"], ["Dani"], ["Beto"], ["Eva"]], res.filas
+
+    # El B+ AGRUPADO tambien debe recorrer en ambos sentidos: se inserta
+    # desordenado a proposito para que el orden venga del indice, no del heap.
+    correr(sm, "CREATE TABLE emp (id INT PRIMARY KEY, nombre VARCHAR(20)) USING SEQUENTIAL;")
+    for i, n in [(3, "Zoe"), (1, "Ana"), (2, "Bob"), (5, "Eve"), (4, "Dan")]:
+        correr(sm, f"INSERT INTO emp VALUES ({i}, '{n}');")
+    correr(sm, "CREATE INDEX ON emp (id) USING BTREE CLUSTERED;")
+    assert sm.open_table("emp").clustered_index is not None
+
+    for direccion, esperado in (("ASC", ["Ana", "Bob", "Zoe", "Dan", "Eve"]),
+                                ("DESC", ["Eve", "Dan", "Zoe", "Bob", "Ana"])):
+        res = correr(sm, f"SELECT nombre FROM emp ORDER BY id {direccion};")[0]
+        assert res.filas == [[n] for n in esperado], res.filas
+        nodos = [p["node"] for p in res.plan]
+        assert "INDEX SCAN" in nodos and "EXTERNAL SORT" not in nodos, \
+            f"el agrupado no recorrio el indice en {direccion}: {res.plan}"
+
+    res = correr(sm, "SELECT nombre FROM emp WHERE id >= 2 ORDER BY id DESC;")[0]
+    assert res.filas == [["Eve"], ["Dan"], ["Zoe"], ["Bob"]], res.filas
+
+    sm.close()
+    limpiar()
+    print("test_order_by_usa_indice_en_asc_y_desc: OK")
+
+
+def test_order_by_en_join_usa_external_sort():
+    """El ORDER BY de un JOIN no puede servirse desde un indice: siempre es
+    un ExternalSort sobre el registro combinado (regresion del UnboundLocalError
+    de 'reverse' en visit_select_stmt)."""
+    limpiar()
+    sm = StorageManager()
+
+    correr(sm, "CREATE TABLE ventas (id INT PRIMARY KEY, cliente VARCHAR(20), monto FLOAT) USING HEAP;")
+    correr(sm, "INSERT INTO ventas VALUES (1, 'Ana', 300.0);")
+    correr(sm, "INSERT INTO ventas VALUES (2, 'Beto', 100.0);")
+    correr(sm, "CREATE TABLE dept (id INT PRIMARY KEY, d VARCHAR(20)) USING HEAP;")
+    correr(sm, "INSERT INTO dept VALUES (1, 'IA');")
+    correr(sm, "INSERT INTO dept VALUES (2, 'DB');")
+
+    # Beto tiene monto 100 y Ana 300.
+    for direccion, esperado in (("ASC", [["Beto"], ["Ana"]]), ("DESC", [["Ana"], ["Beto"]])):
+        res = correr(sm, f"SELECT ventas.cliente FROM ventas JOIN dept ON ventas.id = dept.id "
+                         f"ORDER BY ventas.monto {direccion};")[0]
+        assert res.filas == esperado, f"JOIN ORDER BY {direccion}: {res.filas} != {esperado}"
+
+        nodos = [p["node"] for p in res.plan]
+        assert "HASH JOIN" in nodos and "EXTERNAL SORT" in nodos, res.plan
+        assert "INDEX SCAN" not in nodos, f"un JOIN no debe barrer un indice: {res.plan}"
+
+        # el plan debe declarar la columna y la direccion del sort
+        sort = next(p for p in res.plan if p["node"] == "EXTERNAL SORT")
+        assert sort["column"] == "monto" and sort["direction"] == direccion, sort
+
+    sm.close()
+    limpiar()
+    print("test_order_by_en_join_usa_external_sort: OK")
+
+
+if __name__ == "__main__":
+    print("=== PROBANDO INDICES (B+ AGUPADO / NO AGUPADO / HASH) Y EXTERNAL ALGOS ===")
+    test_select_usa_indice_unclustered()
+    test_select_usa_indice_unclustered_sobre_sequential()
+    test_select_usa_indice_clustered()
+    test_indice_poblado_con_registros_existentes()
+    test_indices_persisten_y_mantienen_el_crud()
+    test_join_y_groupby_y_orderby_por_sql()
+    test_create_index_rechaza_usos_invalidos()
+    test_select_usa_indice_hash()
+    test_indice_hash_poblado_con_registros_existentes()
+    test_indice_hash_persiste_y_mantiene_el_crud()
+    test_order_by_usa_indice_en_asc_y_desc()
+    test_order_by_en_join_usa_external_sort()
+    print("¡Todas las pruebas del executor avanzado pasaron con éxito!")

@@ -1,0 +1,253 @@
+from storage.buffer_manager import BufferManager
+from storage.file_manager import FileManager
+from storage.rid import RID
+from storage.files.heap_file import HeapFile 
+from storage.files.sequential_file import SequentialFile
+from storage.constraints_manager import ConstraintsManager
+class Table:
+    """
+    Representa una tabla lógica en la base de datos.
+    Encapsula el esquema, la organización física del archivo subyacente
+    (HeapFile o SequentialFile) y expone operaciones CRUD completas.
+    """
+    def __init__(
+        self, 
+        name: str, 
+        schema: list[str], 
+        buffer_manager: BufferManager, 
+        file_type: str = "heap",
+        key_index: int = 0,
+        not_null_columns: list[int] = None,
+        unique_columns: list[int] = None,
+        check_constraints: list[callable] = None,
+        column_names: list[str] = None,
+        check_primary_key: bool = True,
+        file_manager: FileManager = None
+    ):
+        self.name = name
+        self.schema = schema
+        if column_names is None:
+            column_names = [f"col{i}" for i in range(len(schema))]
+        if len(column_names) != len(schema):
+            raise ValueError(
+                f"La tabla '{name}' tiene {len(schema)} tipos pero {len(column_names)} nombres de columna"
+            )
+        self.column_names = column_names
+        self.buffer_manager = buffer_manager
+        self.file_manager = file_manager or getattr(buffer_manager, "active_file", None)
+        if self.file_manager is None:
+            raise ValueError(f"La tabla '{name}' necesita un FileManager para operar")
+        self.file_type = file_type.lower()
+        self.key_index = key_index
+        self.filename = f"{self.name}.dat"
+        
+        self.constraints_manager = ConstraintsManager(
+            table=self,
+            not_null_columns=not_null_columns,
+            unique_columns=unique_columns,
+            check_constraints=check_constraints,
+            check_primary_key=check_primary_key
+        )
+
+        self.clustered_index = None
+
+        self.secondary_indexes: dict[int, list] = {}
+
+        if self.file_type == "heap":
+            self.data_file = HeapFile(self.filename, self.buffer_manager, self.schema,
+                                      file_manager=self.file_manager)
+        elif self.file_type == "sequential":
+            page_size = self.file_manager.page_size
+            self.data_file = SequentialFile(self.buffer_manager, page_size, self.schema,
+                                            file_manager=self.file_manager)
+            self.data_file.key_index = self.key_index
+        else:
+            raise ValueError(f"Organización de archivo no soportada: {self.file_type}")
+
+    def column_index(self, column_name: str) -> int:
+        """
+        Traduce el nombre de una columna a su posicion dentro del registro.
+        Es lo que permite resolver 'SELECT cliente' o 'WHERE id = 5',
+        porque el resto del motor trabaja siempre con posiciones.
+        """
+        try:
+            return self.column_names.index(column_name)
+        except ValueError:
+            raise KeyError(
+                f"La columna '{column_name}' no existe en la tabla '{self.name}'. "
+                f"Columnas disponibles: {self.column_names}"
+            )
+
+    def attach_index(self, column_index: int, index_obj):
+        """Enlaza un índice secundario para actualización automática."""
+        if column_index not in self.secondary_indexes:
+            self.secondary_indexes[column_index] = []
+        self.secondary_indexes[column_index].append(index_obj)
+
+    def set_clustered_index(self, index_obj):
+        """Asigna el índice primario agrupado (BPlusTreeClustered) para esta tabla."""
+        self.clustered_index = index_obj
+
+    def insert(self, values: list, mutation_logger=None) -> RID:
+        """
+        Inserta un registro. Si hay un índice Clustered, pasa a través de él;
+        de lo contrario, inserta directo en el archivo de datos y actualiza los índices secundarios.
+
+        ``mutation_logger`` se llama despues de validar constraints y antes de
+        tocar el archivo fisico. Lo usa el WAL para registrar el undo de una
+        insercion sin romper la API de los callers existentes.
+        """
+        if len(values) != len(self.schema):
+            raise ValueError(
+                f"La tabla '{self.name}' espera {len(self.schema)} valores, recibió {len(values)}"
+            )
+
+        self.constraints_manager.validate_insert(values)
+
+        if mutation_logger is not None:
+            mutation_logger("insert", self, list(values), None)
+
+        if self.clustered_index:
+            key = values[self.key_index]
+            rid = self.clustered_index.insert(key, values)
+        else:
+            rid = self.data_file.insert(values)
+
+        if rid is not None:
+            for col_idx, indexes in self.secondary_indexes.items():
+                key = values[col_idx]
+                for idx in indexes:
+                    idx._insert_ref(key, rid)
+
+        return rid
+
+    def get(self, rid: RID) -> list | None:
+        """
+        Recupera una tupla dado su RID.
+        """
+        return self.data_file.fetch(rid)
+
+    def delete(self, rid: RID, mutation_logger=None) -> bool:
+        """
+        Elimina un registro y limpia sus entradas en los índices secundarios.
+
+        El logger se llama cuando la fila aun existe y antes de modificar el
+        archivo, por lo que puede guardar sus valores originales para undo.
+        """
+        record_values = self.get(rid)
+        if record_values is None:
+            return False
+
+        if mutation_logger is not None:
+            mutation_logger("delete", self, list(record_values), rid)
+
+        ok = self.data_file.delete(rid)
+
+        if ok:
+            for col_idx, indexes in self.secondary_indexes.items():
+                key = record_values[col_idx]
+                for idx in indexes:
+                    if hasattr(idx, "delete_ref"):
+                        idx.delete_ref(key, rid)
+                    else:
+                        idx.delete(key)
+
+        return ok
+
+    def update(self, rid: RID, values: list, mutation_logger=None) -> RID | None:
+        """Actualiza una fila y devuelve su RID resultante."""
+        old_values = self.get(rid)
+        if old_values is None:
+            return None
+        self.constraints_manager.validate_update(values, rid)
+        if mutation_logger is not None:
+            mutation_logger("update", self, list(old_values), rid, list(values))
+
+        if self.clustered_index:
+            old_key = old_values[self.key_index]
+            self.clustered_index.delete(old_key)
+            new_rid = self.clustered_index.insert(values[self.key_index], values)
+        else:
+            updated_in_place = (
+                hasattr(self.data_file, "update")
+                and self.data_file.update(rid, values)
+            )
+            if updated_in_place:
+                new_rid = rid
+            else:
+                self.data_file.delete(rid)
+                new_rid = self.data_file.insert(values)
+
+        for col_idx, indexes in self.secondary_indexes.items():
+            old_key = old_values[col_idx]
+            new_key = values[col_idx]
+            if old_key != new_key:
+                for idx in indexes:
+                    if hasattr(idx, "delete_ref"):
+                        idx.delete_ref(old_key, rid)
+                    else:
+                        idx.delete(old_key)
+                    idx._insert_ref(new_key, new_rid)
+            elif new_rid != rid:
+                for idx in indexes:
+                    idx.delete_ref(old_key, rid)
+                    idx._insert_ref(new_key, new_rid)
+        return new_rid
+
+    def search_by_key(self, key_value) -> list[list]:
+        """
+        Busca por clave priorizando el Árbol B+ Clustered si está disponible.
+        """
+        if self.clustered_index:
+            refs = self.clustered_index.search(key_value)
+            if refs is None:
+                return []
+            if not isinstance(refs, list):
+                refs = [refs]
+            return [self.data_file.fetch(ref) for ref in refs]
+
+        if self.file_type == "sequential" and hasattr(self.data_file, "search"):
+            return [list(record.params) for record in self.data_file.search(key_value)]
+        
+        results = []
+        for _, record_params in self.scan():
+            if record_params[self.key_index] == key_value:
+                results.append(record_params)
+        return results
+
+    def delete_by_key(self, key_value) -> bool:
+        """
+        Elimina registro(s) que coincidan con la clave primaria.
+        """
+        if self.clustered_index:
+            return self.clustered_index.delete(key_value)
+
+        if self.file_type == "sequential" and hasattr(self.data_file, "delete_by_key"):
+            return self.data_file.delete_by_key(key_value)
+        
+        deleted_any = False
+        for rid, record_params in list(self.scan()):
+            if record_params[self.key_index] == key_value:
+                if self.delete(rid):
+                    deleted_any = True
+        return deleted_any
+
+    def scan(self):
+        """
+        Itera sobre todos los registros vivos de la tabla.
+        Genera tuplas de (RID, lista_de_valores).
+        """
+        yield from self.data_file.scan()
+
+    def close(self):
+        """
+        Cierra el archivo subyacente y libera recursos.
+        """
+        if hasattr(self.data_file, "close"):
+            self.data_file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
