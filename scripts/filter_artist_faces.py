@@ -7,8 +7,8 @@ carteles y logos. Para cada artista o integrante se detectan las caras de todas
 sus fotos y se toman como "suyas" las que se repiten en varias fotos (la
 persona o los integrantes de la banda aparecen en muchas, los fans no).
 
-  persona / integrante: se acepta una foto si tiene una cara suya de tamaño
-      mínimo (--min-face) y ninguna cara de otra persona.
+  persona / integrante: se acepta una foto si tiene una sola cara, es suya y
+      tiene el tamaño mínimo (--min-face).
   banda: se acepta una sola foto de grupo: la principal de Deezer si tiene
       caras (si no, es un logo) o, si no, una extra con 2+ caras de la banda y
       ninguna ajena. Las fotos de cada integrante salen de fetch_members.py.
@@ -116,8 +116,10 @@ def process(job):
             if group:
                 keep[group[0]] = "banda"
     else:
+        # una sola cara: los compañeros de banda también se repiten en las
+        # fotos de un integrante, así que "todas suyas" no basta
         for i, (mine, clean) in enumerate(result):
-            if mine and clean:
+            if mine and clean and len(per_image[i]) == 1:
                 keep[i] = "cara"
 
     out = []

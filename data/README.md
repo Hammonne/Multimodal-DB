@@ -128,8 +128,9 @@ por el enlace a Deezer o por nombre.
 Las fotos extra incluyen conciertos, público, logos y carteles.
 `scripts/filter_artist_faces.py` deja solo fotos útiles para buscar por cara:
 
-- **Solista o integrante:** fotos donde aparece esa persona sola, con la cara
-  de al menos el 8 % del alto de la imagen.
+- **Solista o integrante:** fotos donde aparece esa persona sola (una única
+  cara), con la cara de al menos el 8 % del alto de la imagen. Las fotos con
+  compañeros de banda se rechazan aunque también se repitan.
 - **Banda:** una sola foto de grupo (2+ caras de la banda y ninguna ajena),
   preferentemente la principal de Deezer. Las fotos de cara de cada
   integrante están en `members/`.
