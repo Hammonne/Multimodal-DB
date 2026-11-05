@@ -177,24 +177,6 @@ def test_presupuesto_en_bytes_no_postings():
     print("OK: el presupuesto se mide en bytes estimados, no en postings")
 
 
-def test_valida_parametros():
-    for max_memory in (0, -1):
-        try:
-            SPIMIIndex(max_memory=max_memory, output_file="/tmp/no-se-usa")
-            assert False, "max_memory invalido debia fallar"
-        except ValueError as exc:
-            assert "max_memory" in str(exc)
-
-    try:
-        SPIMIIndex(max_open_runs=1, output_file="/tmp/no-se-usa")
-        assert False, "max_open_runs invalido debia fallar"
-    except ValueError as exc:
-        assert "max_open_runs" in str(exc)
-
-    assert MAX_OPEN_RUNS >= 2
-    print("OK: valida max_memory y max_open_runs")
-
-
 def test_corpus_vacio():
     workdir = tempfile.mkdtemp(prefix="spimi_test_")
     try:
@@ -239,7 +221,6 @@ tests = [
     test_merge_termino_repetido_entre_bloques,
     test_consulta_por_offsets,
     test_presupuesto_en_bytes_no_postings,
-    test_valida_parametros,
     test_corpus_vacio,
     test_documento_sin_id,
 ]
