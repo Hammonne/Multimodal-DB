@@ -7,8 +7,8 @@ __pycache__
 *.pyc
 *.pyo
 *.log
-data/features
-data/indexes
+data
+docker-data
 benchmark/**/graficas/*.png
 benchmark/**/graficas/*.jpeg
 benchmark/**/graficas/*.jpg

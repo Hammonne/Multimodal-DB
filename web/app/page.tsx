@@ -131,6 +131,18 @@ function MultimediaSearchPanel() {
   const [result, setResult] = useState<MultimediaResponse | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [examples, setExamples] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API}/api/multimedia/examples?kind=${kind}`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data: { ids?: string[] } | null) => {
+        if (!cancelled) setExamples(data?.ids ?? []);
+      })
+      .catch(() => { if (!cancelled) setExamples([]); });
+    return () => { cancelled = true; };
+  }, [kind]);
 
   async function search() {
     setLoading(true);
@@ -154,21 +166,34 @@ function MultimediaSearchPanel() {
       <section className={`${styles.panel} ${styles.queryPanel}`}>
         <div className={styles.panelHeader}><div><span className={styles.eyebrow}>07 / MULTIMEDIA SEARCH</span><h2 className={styles.panelTitle}>Similitud multimedia</h2></div><div className={styles.searchBadge}><Search size={14} /> k-NN</div></div>
         <div className={styles.panelBody}>
-          <label className={styles.eyebrow} htmlFor="multimedia-query">ID DEL OBJETO DE CONSULTA</label>
-          <input id="multimedia-query" className={styles.editorInput} placeholder="Ej. ruta de portada o track_id" value={queryId} onChange={(event) => setQueryId(event.target.value)} />
+          <label className={styles.eyebrow} htmlFor="multimedia-query">ELIGE UN OBJETO</label>
+          <p className={styles.helpText}>Selecciona un ID de ejemplo y busca objetos parecidos. No necesitas escribir una ruta.</p>
+          <div className={styles.exampleChoices}>
+            {examples.slice(0, 8).map((id) => {
+              const isImage = kind === "sift";
+              const mediaPath = isImage ? id : `audio/${id}.mp3`;
+              const mediaUrl = `${API}/api/multimedia/assets/${mediaPath}`;
+              return <div key={id} role="button" tabIndex={0} className={queryId === id ? styles.exampleChoiceActive : styles.exampleChoice} onClick={() => setQueryId(id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setQueryId(id); }}>
+                {isImage ? <img className={styles.exampleThumbnail} src={mediaUrl} alt={`Portada ${id}`} loading="lazy" /> : <audio className={styles.exampleAudio} controls preload="none" src={mediaUrl} onClick={(event) => event.stopPropagation()} />}
+                <span>{id}</span>
+              </div>;
+            })}
+          </div>
+          <input id="multimedia-query" className={styles.editorInput} list="multimedia-examples" placeholder={examples.length ? "También puedes escribir o pegar un ID" : "Genera primero la base multimedia"} value={queryId} onChange={(event) => setQueryId(event.target.value)} />
+          <datalist id="multimedia-examples">{examples.map((id) => <option key={id} value={id} />)}</datalist>
           <div className={styles.queryMeta}>
             <label>Descriptor <select value={kind} onChange={(event) => setKind(event.target.value)}><option value="sift">SIFT / imagen</option><option value="mfcc">MFCC / audio</option></select></label>
             <label>Índice <select value={index} onChange={(event) => setIndex(event.target.value)}><option value="hnsw">HNSW</option><option value="ivf">IVF</option></select></label>
             <label>Métrica <select value={metric} onChange={(event) => setMetric(event.target.value)}><option value="coseno">Coseno</option><option value="euclidiana">Euclidiana</option><option value="producto_punto">Producto punto</option></select></label>
           </div>
-          <div className={styles.queryActions}><button className={styles.runButton} onClick={search} disabled={loading || !queryId.trim()}><Play size={14} fill="currentColor" /> {loading ? "BUSCANDO" : "BUSCAR SIMILARES"}</button></div>
+          <div className={styles.queryActions}><button className={styles.runButton} onClick={search} disabled={loading || !queryId.trim()}><Play size={14} fill="currentColor" /> {loading ? "BUSCANDO..." : "BUSCAR SIMILARES"}</button></div>
           {message && <div className={styles.catalogHint}><AlertCircle size={15} /><span>{message}</span></div>}
         </div>
       </section>
       <section className={`${styles.panel} ${styles.resultsPanel}`}>
         <div className={styles.panelHeader}><div><span className={styles.eyebrow}>08 / NEIGHBORS</span><h2 className={styles.panelTitle}>Vecinos encontrados</h2></div><div className={styles.searchBadge}><Search size={14} /> {result ? `${result.duration_ms.toFixed(2)} ms` : "WAITING"}</div></div>
         {result && <div className={styles.queryMeta}><span>{result.index.toUpperCase()} · {result.metric} · {result.documents} objetos · {result.dimension} dimensiones</span><span>{result.candidates} candidatos</span></div>}
-        <div className={styles.resultTableWrap}>{result?.results.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>#</th><th className={styles.resultHeader}>Objeto</th><th className={styles.resultHeader}>Distancia</th><th className={styles.resultHeader}>Ground truth</th></tr></thead><tbody>{result.results.map((item) => <tr className={styles.resultRow} key={`${item.id}-${item.rank}`}><td className={styles.resultCell}>{item.rank}</td><td className={styles.resultCell}>{item.id}</td><td className={styles.resultCell}>{item.distance.toFixed(6)}</td><td className={styles.resultCell}>{item.is_query ? "CONSULTA" : "vecino"}</td></tr>)}</tbody></table> : <div className={styles.empty}><Search size={25} /><p>Indica un ID existente en la base de features para consultar sus vecinos.</p></div>}</div>
+        <div className={styles.resultTableWrap}>{result?.results.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>#</th><th className={styles.resultHeader}>Vista previa</th><th className={styles.resultHeader}>Objeto parecido</th><th className={styles.resultHeader}>Distancia</th><th className={styles.resultHeader}>Tipo</th></tr></thead><tbody>{result.results.map((item) => { const isImage = result.kind === "sift"; const mediaPath = isImage ? item.id : `audio/${item.id}.mp3`; const preview = `${API}/api/multimedia/assets/${mediaPath}`; return <tr className={styles.resultRow} key={`${item.id}-${item.rank}`}><td className={styles.resultCell}>{item.rank}</td><td className={styles.resultCell}>{isImage ? <img className={styles.multimediaThumbnail} src={preview} alt={`Portada ${item.id}`} loading="lazy" /> : <audio className={styles.resultAudio} controls preload="none" src={preview} />}</td><td className={styles.resultCell}>{item.id}</td><td className={styles.resultCell}>{item.distance.toFixed(6)}</td><td className={styles.resultCell}>{item.is_query ? "CONSULTA" : "VECINO"}</td></tr>; })}</tbody></table> : <div className={styles.empty}><Search size={25} /><p>{examples.length ? "Elige un ID arriba y pulsa BUSCAR SIMILARES." : "No hay una base multimedia disponible. Genera las features antes de buscar."}</p></div>}</div>
       </section>
     </div>
   );
@@ -331,8 +356,9 @@ export default function Home() {
   async function uploadCsv(file: File) {
     const isCsv = file.name.toLowerCase().endsWith(".csv");
     const isJson = /\.(json|jsonl)$/i.test(file.name);
-    if (!isCsv && !isJson) {
-      setToast({ tone: "error", text: "Solo se pueden cargar archivos CSV, JSON o JSONL" });
+    const isMedia = /\.(jpg|jpeg|png|webp|bmp|mp3|wav|ogg|flac|m4a)$/i.test(file.name);
+    if (!isCsv && !isJson && !isMedia) {
+      setToast({ tone: "error", text: "Carga CSV, JSON, JSONL, imágenes o audio" });
       return;
     }
     setCsvUploading(true);
@@ -350,6 +376,12 @@ export default function Home() {
       if (data.kind === "text_corpus") {
         if (typeof data.sql === "string") setSql(data.sql);
         setToast({ tone: "success", text: `${file.name} cargado: ${data.rows} documentos. SQL de tabla e importación generado; pulsa EJECUTAR.` });
+        setView("queries");
+        return;
+      }
+      if (data.kind === "media_asset") {
+        if (typeof data.sql === "string") setSql(data.sql);
+        setToast({ tone: "success", text: `${file.name} guardado. Se generó SQL para registrarlo; pulsa EJECUTAR.` });
         setView("queries");
         return;
       }
@@ -552,7 +584,7 @@ export default function Home() {
 
           <section className={`${styles.panel} ${styles.planPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>02 / ANALYSIS</span><h2 className={styles.panelTitle}>Plan de ejecución</h2></div><span className={styles.costTag}>{result.plan.length ? `${result.plan.length} NODOS` : "IDLE"}</span></div><div className={styles.planBody}>{result.plan.length ? <div className={styles.planTree}>{result.plan.map((node, index) => <div className={styles.planNode} key={`${node.node}-${index}`}><div className={styles.nodeLine}><span className={styles.nodeIndex}>{String(index + 1).padStart(2, "0")}</span><strong>{node.node}</strong><span className={styles.nodeOp}>{node.operation}</span></div><div className={styles.nodeDetails}>{node.table && <span>TABLE <b>{node.table}</b></span>}{node.column && <span>COLUMN <b>{node.column}</b></span>}{node.index && <span>ACCESS <b>{node.index} / {node.access}</b></span>}{node.rows !== undefined && <span>ROWS <b>{node.rows}</b></span>}</div></div>)}</div> : <div className={styles.empty}><Zap size={25} /><p>El plan aparecerá después de ejecutar una consulta.</p></div>}</div></section>
 
-          <section className={`${styles.panel} ${styles.queryPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>03 / WORKSPACE</span><h2 className={styles.panelTitle}>Consultas</h2></div><div className={styles.queryActions}><button className={styles.iconButton} onClick={copySql} title="Copiar SQL"><Copy size={14} /></button>{loading && <button className={styles.stopButton} onClick={cancelQuery}><CircleStop size={14} /> PARAR</button>}<button className={styles.runButton} onClick={() => runQuery()} disabled={loading}><Play size={14} fill="currentColor" /> {loading ? "EJECUTANDO" : "EJECUTAR"}<kbd className={styles.shortcut}>⌘ ↵</kbd></button></div></div><div className={styles.editorWrap}><div className={styles.editorGutter} ref={gutterRef}>{sql.split("\n").map((_, index) => <span key={index}>{String(index + 1).padStart(2, "0")}</span>)}</div><textarea ref={editorRef} className={styles.editorInput} aria-label="Editor de consulta SQL" spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)} onScroll={syncEditorScroll} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") runQuery(); }} /></div><div className={styles.csvDropzone} onDragOver={(event) => { event.preventDefault(); setCsvDragging(true); }} onDragLeave={() => setCsvDragging(false)} onDrop={handleCsvDrop}><input id="csv-upload" type="file" accept=".csv,.json,.jsonl,text/csv,application/json" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadCsv(file); event.currentTarget.value = ""; }} /><label htmlFor="csv-upload"><FileBox size={15} /> {csvUploading ? "CARGANDO ARCHIVO..." : csvDragging ? "SUELTA EL ARCHIVO AQUÍ" : "ARRASTRA CSV, JSON O JSONL AQUÍ O HAZ CLIC"}</label></div><div className={styles.queryMeta}><span><Terminal size={13} /> SQL / ANSI-LIKE</span><span>{sql.length} caracteres {duration !== null && `· ${duration.toFixed(0)} ms`}</span></div>{error && <div className={styles.error}><AlertCircle size={15} /><span>{error}</span></div>}{history.length > 0 && <div className={styles.historyStrip}><History size={13} /><span>HISTORIAL</span>{history.slice(0, 3).map((item, index) => <button key={`${item.at}-${index}`} onClick={() => setSql(item.sql)} className={item.status === "error" ? styles.historyError : ""}>{item.at} · {item.rows} filas</button>)}</div>}</section>
+          <section className={`${styles.panel} ${styles.queryPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>03 / WORKSPACE</span><h2 className={styles.panelTitle}>Consultas</h2></div><div className={styles.queryActions}><button className={styles.iconButton} onClick={copySql} title="Copiar SQL"><Copy size={14} /></button>{loading && <button className={styles.stopButton} onClick={cancelQuery}><CircleStop size={14} /> PARAR</button>}<button className={styles.runButton} onClick={() => runQuery()} disabled={loading}><Play size={14} fill="currentColor" /> {loading ? "EJECUTANDO" : "EJECUTAR"}<kbd className={styles.shortcut}>⌘ ↵</kbd></button></div></div><div className={styles.editorWrap}><div className={styles.editorGutter} ref={gutterRef}>{sql.split("\n").map((_, index) => <span key={index}>{String(index + 1).padStart(2, "0")}</span>)}</div><textarea ref={editorRef} className={styles.editorInput} aria-label="Editor de consulta SQL" spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)} onScroll={syncEditorScroll} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") runQuery(); }} /></div><div className={styles.csvDropzone} onDragOver={(event) => { event.preventDefault(); setCsvDragging(true); }} onDragLeave={() => setCsvDragging(false)} onDrop={handleCsvDrop}><input id="csv-upload" type="file" accept=".csv,.json,.jsonl,.jpg,.jpeg,.png,.webp,.bmp,.mp3,.wav,.ogg,.flac,.m4a,text/csv,application/json,audio/*,image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadCsv(file); event.currentTarget.value = ""; }} /><label htmlFor="csv-upload"><FileBox size={15} /> {csvUploading ? "CARGANDO ARCHIVO..." : csvDragging ? "SUELTA EL ARCHIVO AQUÍ" : "ARRASTRA CSV, JSON, JSONL, IMAGEN O AUDIO"}</label></div><div className={styles.queryMeta}><span><Terminal size={13} /> SQL / ANSI-LIKE</span><span>{sql.length} caracteres {duration !== null && `· ${duration.toFixed(0)} ms`}</span></div>{error && <div className={styles.error}><AlertCircle size={15} /><span>{error}</span></div>}{history.length > 0 && <div className={styles.historyStrip}><History size={13} /><span>HISTORIAL</span>{history.slice(0, 3).map((item, index) => <button key={`${item.at}-${index}`} onClick={() => setSql(item.sql)} className={item.status === "error" ? styles.historyError : ""}>{item.at} · {item.rows} filas</button>)}</div>}</section>
 
           <section className={`${styles.panel} ${styles.resultsPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>04 / OUTPUT</span><h2 className={styles.panelTitle}>Resultados <em className={styles.resultCount}>{result.row_count ? `${result.row_count} filas` : ""}</em></h2></div><div className={styles.searchBadge}><Search size={14} /> <span>{result.columns.length ? "QUERY COMPLETE" : "WAITING"}</span></div></div><div className={styles.resultTableWrap}>{result.columns.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}>{result.columns.map((column) => <th className={styles.resultHeader} key={column}>{column}</th>)}</tr></thead><tbody>{visibleRows.map((row, rowIndex) => <tr className={styles.resultRow} key={rowIndex}>{row.map((value, valueIndex) => <td className={styles.resultCell} key={valueIndex}>{String(value ?? "NULL")}</td>)}</tr>)}</tbody></table> : <div className={styles.empty}><Table2 size={25} /><p>{result.message}</p></div>}</div>{result.columns.length > 0 && <div className={styles.pagination}><span>ROWS {page * pageSize + 1}-{Math.min((page + 1) * pageSize, result.rows.length)} / {result.rows.length}</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>PREV</button><b>{String(page + 1).padStart(2, "0")} / {String(pageCount).padStart(2, "0")}</b><button disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)}>NEXT</button></div></div>}</section>
           <section className={`${styles.panel} ${styles.spatialPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>05 / SPATIAL</span><h2 className={styles.panelTitle}>Mapa de puntos</h2></div><span className={styles.costTag}>{spatialPoints.length ? `${spatialPoints.length} PUNTOS` : "SIN DATOS"}</span></div><MapPanel points={spatialPoints} selectedTable={selected} /></section>

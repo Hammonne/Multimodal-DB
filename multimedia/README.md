@@ -27,6 +27,12 @@ archivo ─► descriptores locales ─► palabra más cercana ─► histogram
 | `MATCH(...)` | `SIMILAR_TO(...)` |
 
 Todo corre en el entorno `vision` y guarda en `data/features/`, que no se sube al repo.
+Para MFCC instala primero las dependencias del proyecto:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
 Los pasos, en orden (todos se pueden cortar y volver a correr, siguen donde se quedaron):
 
 ```bash
@@ -36,6 +42,38 @@ python -m multimedia.mfcc                                 # 1. descriptores de l
 python -m multimedia.codebook --tipo ambos --ks 1024      # 2. codebook con K-Means
 python -m multimedia.features --tipo ambos --k 1024       # 3. vectores TF-IDF de toda la colección
 ```
+
+Para una demostración rápida con pocas portadas:
+
+```bash
+python scripts/prepare_multimedia_demo.py --tipo sift --limite 50 --k 64
+```
+
+La web detecta automáticamente la base `tfidf_sift_k64.npz` si todavía no
+existe la base grande de K=1024.
+
+Para preparar audio rápidamente:
+
+```bash
+python scripts/prepare_multimedia_demo.py --tipo mfcc --limite 50 --k 64
+```
+
+Si no está instalado `librosa`, el comando se detiene indicando la instalación
+pendiente; no genera un índice vacío.
+
+Los archivos de `data/` cumplen roles distintos:
+
+| Carpeta/archivo | Uso |
+|---|---|
+| `songs.csv` | catálogo de canciones y rutas |
+| `audio/` | archivos usados por MFCC |
+| `covers/` | portadas usadas por SIFT |
+| `artist_images.csv` y `artists/` | catálogo/fotos de artistas; no son la colección SIFT por defecto |
+| `features/` | descriptores, codebooks y vectores que consumen IVF/HNSW |
+
+No se insertan los binarios en una tabla SQL. Una tabla SQL puede guardar
+metadatos y rutas, pero la búsqueda multimedia usa los artefactos generados en
+`data/features/`.
 
 | Paso | Salida en `data/features/` | Tamaño con la data completa |
 |---|---|---|

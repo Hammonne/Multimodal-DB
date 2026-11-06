@@ -24,7 +24,13 @@ def tipo_de(path):
 
 
 def cargar_codebook(tipo, k=K_DEFECTO, data=DATA):
-    z = np.load(os.path.join(data, "features", "codebook", f"{tipo}_k{k}.npz"))
+    path = os.path.join(data, "features", "codebook", f"{tipo}_k{k}.npz")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"falta el codebook {path}. Ejecute primero: "
+            f"python -m multimedia.codebook --tipo {tipo} --ks {k}"
+        )
+    z = np.load(path)
     return {"centroides": z["centroides"].astype(np.float32), "media": z["media"], "desv": z["desv"]}
 
 

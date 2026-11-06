@@ -745,30 +745,50 @@ ranking de documentos.
 | TXT-13 | Elegir 100 000 sin haber generado ese índice y buscar | Se muestra un error explícito; la pantalla no queda simulando resultados. |
 | TXT-14 | Pulsar dos veces **CONSTRUIR ÍNDICE** rápidamente | El estado de carga evita acciones inconsistentes y luego muestra el resultado final. |
 
-## 4. Casos de prueba: pestaña Multimedia
+## 4. Casos de prueba: Multimedia
+
+Multimedia tiene dos flujos distintos:
+
+| Tipo | Entrada | Descriptor | Índice |
+|---|---|---|---|
+| Imágenes | `.jpg`, `.png`, `.webp` | SIFT | IVF o HNSW |
+| Audio | `.mp3`, `.wav`, `.flac` | MFCC | IVF o HNSW |
+
+No se busca texto dentro de estos archivos. SIFT representa patrones visuales
+y MFCC representa características del sonido. Ambos terminan en vectores
+TF-IDF de dimensión `K`.
 
 La pestaña **Multimedia** necesita un ID que exista en las bases de features.
 Tomar un ID real de `data/features/sift_covers.csv` para SIFT o de
 `data/features/mfcc.csv` para MFCC; pegar únicamente ese valor en
 **ID DEL OBJETO DE CONSULTA**.
 
-### 4.0 Demostración rápida
+### 4.0 Demostración rápida desde la web
 
-1. Generar features:
+La colección ya descargada se organiza así: `songs.csv` relaciona cada canción
+con `audio_path` y `cover_path`; los archivos físicos están en `data/audio/` y
+`data/covers/`. No se deben cargar los MP3/JPG como valores de una tabla SQL:
+se guardan rutas y el pipeline crea los vectores.
+
+1. Preparar las features:
 
 ```bash
-python3 -m multimedia.sift
-python3 -m multimedia.mfcc
-python3 -m multimedia.features --tipo sift
-python3 -m multimedia.features --tipo mfcc
+python3 scripts/prepare_multimedia_demo.py --tipo sift --limite 50 --k 64
 ```
 
 2. Abrir **Multimedia**.
-3. Elegir **SIFT / imagen** o **MFCC / audio**.
-4. Copiar un ID real de `data/features/sift_covers.csv` o
-   `data/features/mfcc.csv`.
+3. Elegir **SIFT / imagen**.
+4. Seleccionar uno de los IDs de ejemplo que carga la interfaz.
 5. Elegir `HNSW`, métrica `Coseno` y pulsar **BUSCAR SIMILARES**.
-6. Repetir con `IVF` y comparar vecinos, distancia, candidatos y tiempo.
+6. Repetir con `IVF` y comparar vecinos, candidatos y tiempo.
+
+Para audio, preparar previamente:
+
+```bash
+python3 scripts/prepare_multimedia_demo.py --tipo mfcc --k 64
+```
+
+Luego elegir **MFCC / audio** y repetir la búsqueda.
 
 **Evidencia:** SIFT/MFCC convierten el objeto en un vector; IVF/HNSW recuperan
 vecinos; la métrica define cómo se ordenan.
@@ -792,36 +812,26 @@ Para cada caso comprobar:
 - la cabecera muestra índice, métrica, objetos, dimensiones y candidatos;
 - cambiar el índice o métrica no deja datos de la búsqueda anterior.
 
-### 4.3 Pruebas SQL de índices vectoriales
+### 4.3 Casos SQL: imágenes
 
 Además de la pestaña **Multimedia**, el parser SQL soporta `IVF`, `HNSW`,
 `SIMILAR_TO(...)` y `SIMILARITY_SCORE()`. Estas consultas requieren que las
 rutas usadas en `ruta` existan físicamente y sean compatibles con el extractor
 configurado.
 
-Crear la tabla:
+Usar rutas relativas a `data/`, por ejemplo `covers/982091821.jpg`.
+Crear una tabla de rutas:
 
 ```sql
 CREATE TABLE demo_imagenes (
-  id INT PRIMARY KEY,
-  nombre VARCHAR(100),
-  ruta VARCHAR(255)
+  id VARCHAR(100) PRIMARY KEY,
+  nombre VARCHAR(200),
+  ruta VARCHAR(500)
 ) USING HEAP;
 ```
 
-Insertar rutas reales del proyecto. Reemplazar los valores de ejemplo por
-archivos que existan en `data/`:
-
 ```sql
-INSERT INTO demo_imagenes VALUES (1, 'Imagen de consulta', 'data/images/query.jpg');
-```
-
-```sql
-INSERT INTO demo_imagenes VALUES (2, 'Imagen relacionada', 'data/images/related.jpg');
-```
-
-```sql
-INSERT INTO demo_imagenes VALUES (3, 'Otra imagen', 'data/images/other.jpg');
+INSERT INTO demo_imagenes VALUES ('cover_1', 'Portada 1', 'covers/982091821.jpg');
 ```
 
 Crear los índices vectoriales sobre la columna que contiene las rutas:
@@ -839,7 +849,7 @@ Ejecutar una búsqueda HNSW con coseno:
 ```sql
 SELECT *, SIMILARITY_SCORE() AS score
 FROM demo_imagenes
-WHERE SIMILAR_TO('data/images/query.jpg', k=3)
+WHERE SIMILAR_TO('covers/982091821.jpg', k=3)
 USING HNSW WITH METRIC=cosine
 ORDER BY SIMILARITY_SCORE() DESC
 LIMIT 3;
@@ -850,7 +860,7 @@ Ejecutar una búsqueda IVF con distancia euclidiana:
 ```sql
 SELECT *, SIMILARITY_SCORE() AS score
 FROM demo_imagenes
-WHERE SIMILAR_TO('data/images/query.jpg', k=3)
+WHERE SIMILAR_TO('covers/982091821.jpg', k=3)
 USING IVF WITH METRIC=euclidean
 ORDER BY SIMILARITY_SCORE() DESC
 LIMIT 3;
@@ -861,7 +871,7 @@ Ejecutar producto punto:
 ```sql
 SELECT id, nombre, SIMILARITY_SCORE() AS score
 FROM demo_imagenes
-WHERE SIMILAR_TO('data/images/query.jpg', 3)
+WHERE SIMILAR_TO('covers/982091821.jpg', 3)
 USING HNSW WITH METRIC=dot
 ORDER BY SIMILARITY_SCORE() DESC;
 ```
@@ -880,7 +890,7 @@ Para validar el plan:
 ```sql
 EXPLAIN SELECT *, SIMILARITY_SCORE() AS score
 FROM demo_imagenes
-WHERE SIMILAR_TO('data/images/query.jpg', k=3)
+WHERE SIMILAR_TO('covers/982091821.jpg', k=3)
 USING HNSW WITH METRIC=cosine
 ORDER BY SIMILARITY_SCORE() DESC
 LIMIT 3;
@@ -890,7 +900,55 @@ El plan debe indicar un `VECTOR INDEX SCAN` cuando el índice y la ruta son
 válidos. Si no hay índice compatible, el plan puede indicar un `VECTOR SEQ
 SCAN`, que compara los registros sin usar un índice especializado.
 
-### 4.2 Validaciones de errores
+### 4.4 Casos SQL: audio
+
+Crear la tabla con rutas de audio:
+
+```sql
+CREATE TABLE demo_audio (
+  id VARCHAR(100) PRIMARY KEY,
+  titulo VARCHAR(200),
+  ruta VARCHAR(500)
+) USING HEAP;
+```
+
+Registrar una canción que exista en `data/audio/`:
+
+```sql
+INSERT INTO demo_audio
+VALUES ('4019797791', 'Movin To The Sun', 'audio/4019797791.mp3');
+```
+
+Crear ambos índices:
+
+```sql
+CREATE INDEX ON demo_audio (ruta) USING HNSW;
+CREATE INDEX ON demo_audio (ruta) USING IVF;
+```
+
+Buscar con HNSW y coseno:
+
+```sql
+SELECT id, titulo, SIMILARITY_SCORE() AS score
+FROM demo_audio
+WHERE SIMILAR_TO('audio/4019797791.mp3', k=5)
+USING HNSW WITH METRIC=cosine
+ORDER BY score DESC
+LIMIT 5;
+```
+
+Buscar con IVF y distancia euclidiana:
+
+```sql
+SELECT id, titulo, SIMILARITY_SCORE() AS score
+FROM demo_audio
+WHERE SIMILAR_TO('audio/4019797791.mp3', k=5)
+USING IVF WITH METRIC=euclidean
+ORDER BY score DESC
+LIMIT 5;
+```
+
+### 4.5 Validaciones de errores
 
 | Caso | Acción | Resultado esperado |
 |---|---|---|
@@ -1335,6 +1393,26 @@ consultas SQL vectoriales de la sección 4.3.
 - [ ] Todo resultado indica si fue ejecutado, pendiente o generado con datos
   sintéticos.
 ## Integración SQL de SPIMI
+
+### Preparación multimedia
+
+Las bases multimedia no se generan al subir una tabla SQL. Se construyen una
+vez a partir de los archivos locales:
+
+```bash
+conda activate vision
+python -m multimedia.sift --source covers
+python -m multimedia.codebook --tipo sift --ks 1024
+python -m multimedia.features --tipo sift --k 1024
+```
+
+Para audio:
+
+```bash
+python -m multimedia.mfcc
+python -m multimedia.codebook --tipo mfcc --ks 1024
+python -m multimedia.features --tipo mfcc --k 1024
+```
 
 Para una demostración rápida se recomienda `demo_songs`, porque indexa las
 letras existentes en `data/lyrics/*.txt` sin importar el corpus sintético de

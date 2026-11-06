@@ -33,8 +33,21 @@ def objetos(tipo, data=DATA):
 
 def cargar_todo(objs, data=DATA):
     # todos los descriptores juntos + a qué objeto pertenece cada fila
+    if not objs:
+        raise ValueError(
+            "no hay descriptores multimedia para entrenar el codebook. "
+            "Ejecute primero `python -m multimedia.sift --source covers` "
+            "y verifique que data/features/sift_covers.csv tenga filas."
+        )
     mats = [np.load(os.path.join(data, f)) for _, f in objs]
+    if not mats:
+        raise ValueError("la colección multimedia no contiene archivos .npy")
     dueno = np.repeat(np.arange(len(mats)), [len(m) for m in mats])
+    if not any(len(m) for m in mats):
+        raise ValueError(
+            "los descriptores SIFT están vacíos; revise que las imágenes "
+            "existan y sean legibles."
+        )
     return np.vstack(mats), dueno
 
 
@@ -64,7 +77,9 @@ def consultas_sift(objs, n_desc, rng, data=DATA):
         "jpeg + 200 px": lambda i: cv2.resize(i, (200, 200)),
     }
     validos = np.flatnonzero(n_desc > 0)
-    elegidos = rng.choice(validos, N_CONSULTAS, replace=False)
+    if not len(validos):
+        return []
+    elegidos = rng.choice(validos, min(N_CONSULTAS, len(validos)), replace=False)
     tmp = os.path.join(tempfile.gettempdir(), "consulta_sift.jpg")
     out = []
     for k in elegidos:
@@ -80,7 +95,9 @@ def consultas_mfcc(objs, n_desc, rng, data=DATA):
     # fragmentos de 5 s, la respuesta correcta es la canción completa
     paths = {r["track_id"]: r["audio_path"] for r in leer_csv(os.path.join(data, "songs.csv"))}
     validos = np.flatnonzero(n_desc > 1000)     # al menos ~23 s de audio
-    elegidos = rng.choice(validos, N_CONSULTAS, replace=False)
+    if not len(validos):
+        return []
+    elegidos = rng.choice(validos, min(N_CONSULTAS, len(validos)), replace=False)
     out = []
     for k in elegidos:
         dur = instante(n_desc[k])
@@ -152,9 +169,9 @@ def experimento(tipo, ks, data=DATA):
         etiq_s = km.predict(S)
         inercia = float(((S - km.cluster_centers_[etiq_s]) ** 2).sum())
         tamanos = np.bincount(etiq_s, minlength=K)
-        sub = rng.choice(len(S), 20_000, replace=False)
+        sub = rng.choice(len(S), min(20_000, len(S)), replace=False)
         db = davies_bouldin_score(S[sub], etiq_s[sub])
-        sil = silhouette_score(S[sub[:10_000]], etiq_s[sub[:10_000]])
+        sil = silhouette_score(S[sub[:min(10_000, len(sub))]], etiq_s[sub[:min(10_000, len(sub))]])
 
         t0 = time.time()
         base, idf = tfidf(asignar(km, X), dueno, len(objs), K)

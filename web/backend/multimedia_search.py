@@ -18,13 +18,27 @@ class MultimediaSearchManager:
         self._indexes: dict[tuple[str, str, str], tuple[Any, np.ndarray, np.ndarray]] = {}
 
     def _load_base(self, kind: str) -> dict[str, np.ndarray]:
-        path = Path(features.ruta_base(kind, features.K_DEFECTO, str(self.data)))
+        requested = int(os.getenv("MULTIMEDIA_K", features.K_DEFECTO))
+        path = Path(features.ruta_base(kind, requested, str(self.data)))
+        if not path.is_file():
+            candidates = list(
+                (self.data / "features").glob(f"tfidf_{kind}_k*.npz")
+            )
+            if candidates:
+                candidates.sort(
+                    key=lambda candidate: int(candidate.stem.rsplit("_k", 1)[1]),
+                    reverse=True,
+                )
+                path = candidates[0]
+                requested = int(path.stem.rsplit("_k", 1)[1])
         if not path.is_file():
             raise FileNotFoundError(
                 f"no existe la base multimedia {path}. "
-                f"Ejecute: python -m multimedia.features --tipo {kind}."
+                f"Ejecute primero el pipeline: python -m multimedia.sift --source covers; "
+                f"python -m multimedia.codebook --tipo {kind} --ks 1024; "
+                f"python -m multimedia.features --tipo {kind}."
             )
-        return features.cargar_base(kind, features.K_DEFECTO, str(self.data))
+        return features.cargar_base(kind, requested, str(self.data))
 
     def _build(self, kind: str, index_name: str, metric: str) -> tuple[Any, np.ndarray, np.ndarray]:
         base = self._load_base(kind)
@@ -86,6 +100,10 @@ class MultimediaSearchManager:
             "duration_ms": (time.perf_counter() - started) * 1000,
             "candidates": int(getattr(index, "candidatos", 0)),
         }
+
+    def examples(self, kind: str, limit: int = 8) -> list[str]:
+        base = self._load_base(kind)
+        return [str(value) for value in base["ids"][:limit]]
 
 
 multimedia_search = MultimediaSearchManager(Path(__file__).resolve().parents[2])

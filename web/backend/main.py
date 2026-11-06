@@ -54,6 +54,12 @@ class CsvUploadResponse(BaseModel):
     kind: str = "csv"
     sql: str | None = None
 
+
+MEDIA_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp",
+    ".mp3", ".wav", ".ogg", ".flac", ".m4a",
+}
+
 class QueryResponse(BaseModel):
     message: str = ""
     columns: list[str] = []
@@ -100,7 +106,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_storage = StorageManager()
+_storage = StorageManager(wal_path=os.getenv("WAL_PATH", "chuta_wal.log"))
 _sessions: dict[str, ExecuteVisitor] = {}
 UPLOAD_DIR = ROOT / "data" / "uploads"
 SQL_INT_MIN = -(2**31)
@@ -145,7 +151,7 @@ def health() -> dict[str, str]:
 def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
     filename = Path(request.filename).name
     suffix = Path(filename).suffix.lower()
-    if suffix not in {".csv", ".json", ".jsonl"} or not re.fullmatch(
+    if suffix not in {".csv", ".json", ".jsonl"} | MEDIA_EXTENSIONS or not re.fullmatch(
         r"[A-Za-z0-9._-]+", filename
     ):
         raise HTTPException(
@@ -166,6 +172,29 @@ def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError as error:
         raise HTTPException(status_code=400, detail="el CSV debe estar codificado en UTF-8") from error
+    if suffix in MEDIA_EXTENSIONS:
+        media_dir = ROOT / "data" / "uploads" / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        target = media_dir / filename
+        target.write_bytes(content)
+        media_id = Path(filename).stem
+        kind = "sift" if suffix in {".jpg", ".jpeg", ".png", ".webp", ".bmp"} else "mfcc"
+        table = "demo_images" if kind == "sift" else "demo_audio"
+        sql = (
+            f"CREATE TABLE {table} (\n"
+            "  id VARCHAR(255) PRIMARY KEY,\n"
+            "  path VARCHAR(500)\n"
+            ") USING HEAP;\n\n"
+            f"INSERT INTO {table} VALUES ('{media_id}', "
+            f"'uploads/media/{filename}');"
+        )
+        return CsvUploadResponse(
+            filename=filename,
+            path=f"data/uploads/media/{filename}",
+            rows=1,
+            kind="media_asset",
+            sql=sql,
+        )
     if suffix in {".json", ".jsonl"}:
         try:
             if suffix == ".json":
@@ -324,6 +353,26 @@ def search_multimedia(request: MultimediaSearchRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/multimedia/examples")
+def multimedia_examples(kind: str = "sift") -> dict[str, Any]:
+    try:
+        return {"kind": kind, "ids": multimedia_search.examples(kind)}
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/api/multimedia/assets/{asset_path:path}")
+def multimedia_asset(asset_path: str) -> FileResponse:
+    """Sirve únicamente archivos multimedia ubicados dentro de data/."""
+    data_root = (ROOT / "data").resolve()
+    asset = (data_root / asset_path).resolve()
+    if data_root not in asset.parents or asset.suffix.lower() not in MEDIA_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="recurso multimedia inválido")
+    if not asset.is_file():
+        raise HTTPException(status_code=404, detail="recurso multimedia no encontrado")
+    return FileResponse(asset)
 
 
 @app.get("/api/multimedia/benchmarks")

@@ -83,16 +83,21 @@ class SchemaCatalog:
         if target_table is None:
             return None
 
-        columns = []
+        columns_by_order = {}
         for _, params in self.sys_columns.scan():
             tbl_name = self._clean_str(params[0])
             if tbl_name == name:
                 col_name = self._clean_str(params[1])
                 data_type = self._clean_str(params[2])
                 col_order = params[3]
-                columns.append((col_order, col_name, data_type))
+                # Un bootstrap interrumpido puede dejar una segunda copia de
+                # la metadata. El orden de columna identifica la definición
+                # válida y evita duplicarla al abrir la tabla.
+                columns_by_order.setdefault(
+                    col_order, (col_order, col_name, data_type)
+                )
 
-        columns.sort(key=lambda x: x[0])
+        columns = sorted(columns_by_order.values(), key=lambda x: x[0])
         target_table["schema"] = [col[2] for col in columns]
         target_table["column_names"] = [col[1] for col in columns]
 

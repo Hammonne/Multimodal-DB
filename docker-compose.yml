@@ -23,7 +23,9 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./chuta_wal.log:/app/chuta_wal.log
+      - ./docker-data:/app/docker-data
+    environment:
+      WAL_PATH: /app/docker-data/chuta_wal.log
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s

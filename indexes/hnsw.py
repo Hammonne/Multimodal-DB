@@ -20,7 +20,8 @@ class HNSW:
         self.seed = seed
         self.rng = np.random.default_rng(seed)
         self.vectores = None
-        self.ids = np.zeros(0, np.int64)
+        # Los IDs pueden ser numéricos (audio) o rutas (imágenes).
+        self.ids = np.array([], dtype=object)
         self.nivel = []                 # nivel más alto de cada nodo
         self.vecinos = []               # vecinos[nodo][l] = lista de nodos en el nivel l
         self.entrada = None
@@ -112,7 +113,7 @@ class HNSW:
         if X.ndim == 1:
             X = X[None]
         inicio = len(self)
-        ids = np.arange(inicio, inicio + len(X)) if ids is None else np.asarray(ids, np.int64)
+        ids = np.arange(inicio, inicio + len(X)) if ids is None else np.asarray(ids)
         self.vectores = X.copy() if self.vectores is None else np.vstack([self.vectores, X])
         self.ids = np.concatenate([self.ids, ids])
         for nodo in range(inicio, inicio + len(X)):

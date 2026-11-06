@@ -14,6 +14,10 @@
 .searchWorkspace input.editorInput { min-height: 42px; box-sizing: border-box; }
 .searchWorkspace .queryMeta { flex-wrap: wrap; justify-content: flex-start; gap: 24px; padding-top: 10px; padding-bottom: 10px; }
 .searchWorkspace .queryMeta label { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.helpText { margin: 4px 0 10px; color: var(--muted); font: 11px/1.4 'IBM Plex Mono', monospace; }
+.exampleChoices { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.exampleChoice, .exampleChoiceActive { padding: 6px 9px; border: 1px solid var(--line); background: rgba(255,255,255,.35); color: var(--muted); font: 10px 'IBM Plex Mono', monospace; cursor: pointer; }
+.exampleChoice:hover, .exampleChoiceActive { border-color: var(--amber); color: var(--ink); background: var(--amber-soft); }
 .searchWorkspace select { min-width: 130px; padding: 6px 8px; border: 1px solid var(--line); color: var(--ink); background: var(--paper); font: 11px 'IBM Plex Mono', monospace; }
 .secondaryButton { display: flex; align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid var(--line); color: var(--ink); background: transparent; font: 600 10px 'IBM Plex Mono', monospace; letter-spacing: .3px; white-space: nowrap; }
 .secondaryButton:hover { border-color: var(--ink); background: var(--amber-soft); }
@@ -45,3 +49,9 @@
 @media (max-width: 1100px) { .workspace { grid-template-columns: minmax(200px, .7fr) minmax(330px, 1.5fr); grid-template-rows: minmax(340px, 47vh) minmax(270px, 34vh) minmax(270px, 34vh) minmax(320px, 36vh); } .filesPanel { grid-column: 1; grid-row: 1 / span 2; } .planPanel { grid-column: 2; grid-row: 2; } .queryPanel { grid-column: 2; grid-row: 1; } .resultsPanel { grid-column: 2; grid-row: 3; } .spatialPanel { grid-column: 1 / -1; grid-row: 4; } .demoGrid { grid-template-columns: 190px 1fr; } .demoInspector { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); padding: 0; } }
 @media (max-width: 900px) { .topbar { padding: 0 18px; } .status { display: none; } .viewTabs { margin-left: auto; margin-right: 15px; } .workspace { padding: 18px; grid-template-columns: 1fr; grid-template-rows: auto; } .panel, .resultsPanel, .planPanel, .filesPanel, .queryPanel, .spatialPanel { grid-column: auto; grid-row: auto; min-height: 360px; } .queryPanel { min-height: 430px; } .demoShell { padding: 18px; } .demoHero { display: block; } .simulationBadge { width: max-content; margin-top: 18px; } .demoGrid { grid-template-columns: 1fr; } .demoInspector { grid-column: auto; grid-template-columns: 1fr; } }
 @media (max-width: 520px) { .workspace { padding: 12px; gap: 12px; } .panelHeader { padding: 13px; } .shortcut { display: none; } .panelTitle { font-size: 17px; } .brand span { display: none; } .pagination > span { font-size: 9px; } }
+.multimediaThumbnail { width: 54px; height: 54px; display: block; object-fit: cover; border: 1px solid var(--line); background: #e7e4d9; }
+.audioPreview { color: var(--muted); font-size: 9px; letter-spacing: .5px; }
+.exampleChoices .exampleChoice, .exampleChoices .exampleChoiceActive { min-width: 110px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.exampleThumbnail { width: 72px; height: 72px; object-fit: cover; border: 1px solid var(--line); background: #e7e4d9; }
+.exampleAudio { width: 180px; max-width: 100%; }
+.resultAudio { width: 190px; max-width: 30vw; height: 32px; }

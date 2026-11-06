@@ -3,4 +3,5 @@ uvicorn[standard]>=0.30.0
 numpy>=1.26
 scikit-learn>=1.4
 opencv-python-headless>=4.10
+librosa>=0.10
 psycopg[binary]>=3.2

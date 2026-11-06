@@ -112,6 +112,8 @@ class HeapFile(RecordFile):
         raw = self.buffer_manager.fetch_page(page_id, self.file_manager)
         page = VariablePage(raw, PAGE_SIZE, self.serializer)
         page.page_id = page_id
+        if page.ensure_initialized():
+            self.buffer_manager.mark_dirty(page_id, self.file_manager)
         return page
 
     def _sync_page(self, page: VariablePage):
@@ -182,11 +184,19 @@ class HeapFile(RecordFile):
                 continue
             page = self._load(page_id)
             slot_id = page.insert(record)
+            if slot_id < 0:
+                self.buffer_manager.unpin_page(page_id, self.file_manager)
+                continue
             self._sync_page(page)
             return RID(page_id, slot_id)
 
         page = self._new_page()
         slot_id = page.insert(record)
+        if slot_id < 0:
+            self.buffer_manager.unpin_page(page.page_id, self.file_manager)
+            raise RuntimeError(
+                f"No hay espacio para insertar el registro en la página {page.page_id}."
+            )
         self._sync_page(page)
         return RID(page.page_id, slot_id)
 

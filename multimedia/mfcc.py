@@ -25,7 +25,13 @@ INDEX_FIELDS = ["track_id", "audio_path", "n_frames", "duration_s", "features_pa
 
 def cargar_audio(path, offset=0.0, duration=None):
     # mono y a SR Hz
-    import librosa
+    try:
+        import librosa
+    except ImportError as error:
+        raise RuntimeError(
+            "MFCC requiere librosa. Instale las dependencias con "
+            "`python3 -m pip install -r requirements.txt`."
+        ) from error
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         y, _ = librosa.load(path, sr=SR, mono=True, offset=offset, duration=duration)
@@ -35,7 +41,13 @@ def cargar_audio(path, offset=0.0, duration=None):
 def extraer_mfcc(path=None, y=None, offset=0.0, duration=None):
     # (n, 39), una fila por ventana
     # se le puede pasar la ruta, un fragmento (offset/duration) o la señal y
-    import librosa
+    try:
+        import librosa
+    except ImportError as error:
+        raise RuntimeError(
+            "MFCC requiere librosa. Instale las dependencias con "
+            "`python3 -m pip install -r requirements.txt`."
+        ) from error
     if y is None:
         y = cargar_audio(path, offset, duration)
     if len(y) < N_FFT:
@@ -69,7 +81,8 @@ def procesar(trabajo):
     else:
         try:
             desc = extraer_mfcc(os.path.join(data, audio_path))
-        except Exception:
+        except Exception as error:
+            print(f"no se pudo procesar el audio {audio_path}: {error}", flush=True)
             return None
         os.makedirs(os.path.dirname(completo), exist_ok=True)
         np.save(completo, desc)
@@ -111,6 +124,12 @@ def main():
         w.writerows(filas)
 
     n = [r["n_frames"] for r in filas]
+    if not n:
+        raise RuntimeError(
+            f"no se pudo extraer MFCC de los {fallos} audios. "
+            "Revise las rutas y las dependencias; pruebe "
+            "`python3 -m pip install -r requirements.txt`."
+        )
     print(f"{len(filas)} audios en {time.time() - t0:.1f} s, {fallos} fallos; "
           f"ventanas por audio: media {np.mean(n):.0f}, mín {min(n)}, máx {max(n)}; "
           f"total {sum(n)}\nÍndice: {indice}")

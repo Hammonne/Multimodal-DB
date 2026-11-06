@@ -389,7 +389,7 @@ class Parser:
     def parse_select_item(self):
         item = self.parse_proj()
         if self.match(Token.Type.AS):
-            if not self.match(Token.Type.ID):
+            if not (self.match(Token.Type.ID) or self.match(Token.Type.SCORE)):
                 self.error("se esperaba un nombre despues de AS")
             item.alias = self.previous.text
         return item
@@ -783,8 +783,17 @@ class Parser:
     def parse_order_expr(self):
         if self._es_distancia():
             return self.parse_distancia()
-        if self.check(Token.Type.SIMILARITY_SCORE) or self.check(Token.Type.SCORE):
+        if self.check(Token.Type.SIMILARITY_SCORE):
             return self.parse_similarity_score()
+        if self.check(Token.Type.SCORE):
+            self.match(Token.Type.SCORE)
+            if self.check(Token.Type.LPAREN):
+                if not self.match(Token.Type.LPAREN):
+                    self.error("se esperaba ( despues de SCORE")
+                if not self.match(Token.Type.RPAREN):
+                    self.error("SCORE() no recibe argumentos")
+                return SimilarityScoreExpr()
+            return ColRef(columna=self.previous.text)
         return self.parse_col_ref()
 
     # ColRef ::= id | id . id
