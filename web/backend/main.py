@@ -36,7 +36,9 @@ class QueryRequest(BaseModel):
 
 class CsvUploadRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
-    content_base64: str = Field(min_length=1, max_length=20_000_000)
+    # Base64 ocupa aproximadamente 4/3 del tamaño original. Esto permite
+    # cargar el corpus JSONL de 100 000 documentos sin truncarlo.
+    content_base64: str = Field(min_length=1, max_length=70_000_000)
 
 
 class CsvColumn(BaseModel):
@@ -50,6 +52,7 @@ class CsvUploadResponse(BaseModel):
     columns: list[CsvColumn] = []
     rows: int
     kind: str = "csv"
+    sql: str | None = None
 
 class QueryResponse(BaseModel):
     message: str = ""
@@ -153,8 +156,12 @@ def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
         content = base64.b64decode(request.content_base64, validate=True)
     except (ValueError, base64.binascii.Error) as error:
         raise HTTPException(status_code=400, detail="el contenido no es Base64 válido") from error
-    if len(content) > 15 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="el CSV supera el límite de 15 MB")
+    max_upload_bytes = 50 * 1024 * 1024
+    if len(content) > max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail="el archivo supera el límite de 50 MB",
+        )
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError as error:
@@ -190,11 +197,29 @@ def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
         with corpus_path.open("w", encoding="utf-8") as handle:
             for record in normalized:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # El motor SQL importa CSV. Generamos una representación tabular del
+        # mismo corpus para que el upload también pueda probar CREATE INDEX.
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        sql_filename = "lyrics.jsonl.csv"
+        sql_target = UPLOAD_DIR / sql_filename
+        with sql_target.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["id", "title", "lyrics"])
+            writer.writeheader()
+            writer.writerows(normalized)
+        sql = (
+            "CREATE TABLE demo_lyrics (\n"
+            "  id VARCHAR(64) PRIMARY KEY,\n"
+            "  title VARCHAR(256),\n"
+            "  lyrics VARCHAR(512)\n"
+            ") USING HEAP;\n\n"
+            "IMPORT INTO demo_lyrics FROM 'data/uploads/lyrics.jsonl.csv';"
+        )
         return CsvUploadResponse(
             filename=filename,
             path="data/lyrics.jsonl",
             rows=len(normalized),
             kind="text_corpus",
+            sql=sql,
         )
 
     reader = csv.DictReader(io.StringIO(text))

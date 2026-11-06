@@ -180,6 +180,14 @@ class StorageManager:
                         self.index_manager.create_clustered_index(
                             payload["index_name"], table, payload["column_name"]
                         )
+                    elif payload["index_kind"] == "SPIMI_IDX":
+                        # El artefacto SPIMI se persiste fuera del storage
+                        # manager y se carga perezosamente por el executor.
+                        self.catalog.register_index(
+                            payload["index_name"], record.file_name,
+                            payload["column_name"], payload["column_index"],
+                            "spimi"
+                        )
                     elif payload["index_kind"] == "HASH_IDX":
                         self.index_manager.create_hash_index(
                             payload["index_name"], table,

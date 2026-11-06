@@ -1334,3 +1334,39 @@ consultas SQL vectoriales de la sección 4.3.
 - [ ] Se muestra al menos una galería de aciertos y errores.
 - [ ] Todo resultado indica si fue ejecutado, pendiente o generado con datos
   sintéticos.
+## Integración SQL de SPIMI
+
+Para una demostración rápida se recomienda `demo_songs`, porque indexa las
+letras existentes en `data/lyrics/*.txt` sin importar el corpus sintético de
+100 000 documentos:
+
+```sql
+CREATE INDEX ON demo_songs (lyrics_path) USING SPIMI;
+
+SELECT title, artist, SCORE() AS relevancia
+FROM demo_songs
+WHERE MATCH(lyrics_path, 'love tonight') USING BM25
+LIMIT 10;
+
+SELECT title, artist, SCORE() AS relevancia
+FROM demo_songs
+WHERE MATCH(lyrics_path, 'love tonight') USING TF_IDF
+LIMIT 10;
+```
+
+`BM25` y `TF_IDF` reutilizan el mismo índice invertido SPIMI; solo cambia el
+ranking. Las rutas relativas como `lyrics/track.txt` se resuelven desde
+`data/`.
+
+```sql
+CREATE INDEX ON demo_lyrics (lyrics_path) USING SPIMI;
+SELECT *, SCORE() AS relevancia
+FROM demo_lyrics
+WHERE MATCH(lyrics_path, 'machine learning') USING BM25
+ORDER BY SCORE() DESC
+LIMIT 10;
+```
+
+También se puede cambiar `BM25` por `TF_IDF`. El plan debe mostrar `TEXT INDEX
+SCAN` y la salida debe incluir las filas originales y su score. Si no existe el
+índice, el motor muestra la sentencia `CREATE INDEX` necesaria.

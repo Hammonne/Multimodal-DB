@@ -9,7 +9,7 @@ from ast_sql import (AggFun, AndCond, BetweenCond, BoolValue, ColRef,
                      SelectItem, SelectStmt, SortDir, StrValue,
                      TransactionStmt, UpdateStmt,
                      METRICAS_VECTORIALES, SimilarityScoreExpr,
-                     SimilarToExpr, VectorIndex, ImportCsvStmt)
+                     SimilarToExpr, VectorIndex, ImportCsvStmt, MatchExpr)
 
 
 # En C++ esto era un runtime_error con la posicion pegada al mensaje.
@@ -233,8 +233,10 @@ class Parser:
             ci.tipo = IndexKind.IVF_IDX
         elif self.match(Token.Type.HNSW):
             ci.tipo = IndexKind.HNSW_IDX
+        elif self.match(Token.Type.SPIMI):
+            ci.tipo = IndexKind.SPIMI_IDX
         else:
-            self.error("se esperaba BTREE, HASH, BITMAP, RTREE, IVF o HNSW")
+            self.error("se esperaba BTREE, HASH, BITMAP, RTREE, IVF, HNSW o SPIMI")
 
         if self.match(Token.Type.CLUSTERED):
             ci.clustered = True
@@ -247,7 +249,7 @@ class Parser:
         # por el obligaria a copiar cada fila al heap, que ya es donde vive
         if ci.clustered and ci.tipo == IndexKind.BITMAP_IDX:
             self.error_semantico("un indice BITMAP no puede ser CLUSTERED")
-        if ci.clustered and ci.tipo in (IndexKind.IVF_IDX, IndexKind.HNSW_IDX):
+        if ci.clustered and ci.tipo in (IndexKind.IVF_IDX, IndexKind.HNSW_IDX, IndexKind.SPIMI_IDX):
             self.error_semantico("un indice IVF o HNSW no puede ser CLUSTERED")
         return ci
 
@@ -282,6 +284,8 @@ class Parser:
         if self.check(Token.Type.STAR):
             self.match(Token.Type.STAR)
             s.select_all = True
+            while self.match(Token.Type.COMA):
+                s.proyeccion.append(self.parse_select_item())
         else:
             s.proyeccion.append(self.parse_select_item())
             while self.match(Token.Type.COMA):
@@ -361,7 +365,11 @@ class Parser:
         usa_score = (isinstance(s.order_by, SimilarityScoreExpr)
                      or any(isinstance(i.columna, SimilarityScoreExpr)
                             for i in s.proyeccion))
-        if not similares:
+        tiene_match = isinstance(s.condicion, MatchExpr) or (
+            isinstance(s.condicion, AndCond)
+            and any(isinstance(c, MatchExpr) for c in s.condicion.condiciones)
+        )
+        if not similares and not tiene_match:
             if s.indice_vectorial != VectorIndex.NINGUNO:
                 self.error_semantico("USING IVF/HNSW solo se usa con SIMILAR_TO")
             if usa_score:
@@ -390,7 +398,7 @@ class Parser:
     def parse_proj(self):
         item = SelectItem()
 
-        if self.check(Token.Type.SIMILARITY_SCORE):
+        if self.check(Token.Type.SIMILARITY_SCORE) or self.check(Token.Type.SCORE):
             item.columna = self.parse_similarity_score()
             return item
 
@@ -573,6 +581,9 @@ class Parser:
         if self.check(Token.Type.SIMILAR_TO):
             return self.parse_similar_to()
 
+        if self.check(Token.Type.MATCH):
+            return self.parse_match()
+
         # Predicado espacial de pertenencia: dentro_de(col, POLYGON(...))
         # No lleva operador: ya es verdadero o falso por si mismo.
         if self.check(Token.Type.DENTRO_DE):
@@ -737,19 +748,42 @@ class Parser:
 
     # Score ::= SIMILARITY_SCORE ( )
     def parse_similarity_score(self):
-        self.match(Token.Type.SIMILARITY_SCORE)
+        if not (self.match(Token.Type.SIMILARITY_SCORE) or self.match(Token.Type.SCORE)):
+            self.error("se esperaba SCORE()")
         if not self.match(Token.Type.LPAREN):
-            self.error("se esperaba ( despues de SIMILARITY_SCORE")
+            self.error("se esperaba ( despues de SCORE")
         if not self.match(Token.Type.RPAREN):
             self.error("SIMILARITY_SCORE() no recibe argumentos")
         return SimilarityScoreExpr()
+
+    def parse_match(self):
+        self.match(Token.Type.MATCH)
+        if not self.match(Token.Type.LPAREN):
+            self.error("se esperaba ( despues de MATCH")
+        columna = self.parse_col_ref()
+        if not self.match(Token.Type.COMA):
+            self.error("MATCH espera columna y consulta")
+        if not self.match(Token.Type.STR):
+            self.error("MATCH espera la consulta entre comillas")
+        expr = MatchExpr(columna, self.previous.text)
+        if not self.match(Token.Type.RPAREN):
+            self.error("se esperaba ) al cerrar MATCH")
+        if not self.match(Token.Type.USING):
+            self.error("MATCH requiere USING BM25 o USING TF_IDF")
+        if self.match(Token.Type.BM25):
+            expr.algoritmo = "bm25"
+        elif self.match(Token.Type.TF_IDF):
+            expr.algoritmo = "tfidf"
+        else:
+            self.error("se esperaba BM25 o TF_IDF despues de USING")
+        return expr
 
     # OrderExpr ::= Distancia | SIMILARITY_SCORE ( ) | ColRef
     # un ColRef tambien puede ser el alias de un AS, eso lo resuelve el executor
     def parse_order_expr(self):
         if self._es_distancia():
             return self.parse_distancia()
-        if self.check(Token.Type.SIMILARITY_SCORE):
+        if self.check(Token.Type.SIMILARITY_SCORE) or self.check(Token.Type.SCORE):
             return self.parse_similarity_score()
         return self.parse_col_ref()
 

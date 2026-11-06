@@ -93,6 +93,11 @@ PALABRAS_RESERVADAS = {
     "SIMILARITY_SCORE": Token.Type.SIMILARITY_SCORE,
     "WITH": Token.Type.WITH,
     "METRIC": Token.Type.METRIC,
+    "SPIMI": Token.Type.SPIMI,
+    "MATCH": Token.Type.MATCH,
+    "BM25": Token.Type.BM25,
+    "TF_IDF": Token.Type.TF_IDF,
+    "SCORE": Token.Type.SCORE,
 
     # Busqueda por similitud (2.4.3)
     "SIMILAR_TO": Token.Type.SIMILAR_TO,

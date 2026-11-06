@@ -113,7 +113,11 @@ class BufferManager:
 
         frame = self.frames[frame_id]
         if frame.phys_page_id != -1:
-            del self.page_table[(frame.file_manager, frame.phys_page_id)]
+            # Un frame puede haber sido invalidado al cerrar o recrear un
+            # archivo sin que su entrada siga en page_table. La expulsión
+            # debe ser idempotente para no convertir una operación de I/O en
+            # un KeyError con una tupla interna ilegible para el usuario.
+            self.page_table.pop((frame.file_manager, frame.phys_page_id), None)
 
         frame.file_manager = file_manager
         frame.phys_page_id = phys_page_id

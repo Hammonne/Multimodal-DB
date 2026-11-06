@@ -15,6 +15,7 @@ class IndexKind(Enum):
     RTREE_IDX = auto()
     IVF_IDX = auto()      # vectoriales (2.4.2), sobre una columna con rutas de archivos
     HNSW_IDX = auto()
+    SPIMI_IDX = auto()
 
 
 # Tipos de dato del catalogo
@@ -261,6 +262,16 @@ class SimilarityScoreExpr:
 
     def accept(self, visitor):
         return visitor.visit_similarity_score_expr(self)
+
+
+class MatchExpr:
+    def __init__(self, columna, consulta):
+        self.columna = columna
+        self.consulta = consulta
+        self.algoritmo = "bm25"
+
+    def accept(self, visitor):
+        return visitor.visit_match_expr(self)
 
 
 # -----------------------------

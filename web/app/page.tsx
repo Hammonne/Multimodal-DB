@@ -31,6 +31,26 @@ type TransactionDetail = { transaction_id: number; status: string; last_lsn: num
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const starterSql = "SELECT *\nFROM ventas\nWHERE id BETWEEN 1 AND 10\nORDER BY id ASC\nLIMIT 25;";
 
+function apiErrorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object") {
+        const entry = item as { msg?: unknown; loc?: unknown };
+        const location = Array.isArray(entry.loc) ? ` (${entry.loc.join(".")})` : "";
+        return `${String(entry.msg ?? "Error de validación")}${location}`;
+      }
+      return String(item);
+    }).join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    const entry = detail as { message?: unknown; msg?: unknown; detail?: unknown };
+    return apiErrorMessage(entry.message ?? entry.msg ?? entry.detail, fallback);
+  }
+  return fallback;
+}
+
 function TextSearchPanel() {
   const [query, setQuery] = useState("base de datos vectorial");
   const [algorithm, setAlgorithm] = useState("bm25");
@@ -326,10 +346,11 @@ export default function Home() {
         body: JSON.stringify({ filename: file.name, content_base64: btoa(binary) }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail ?? "No se pudo cargar el CSV");
+      if (!response.ok) throw new Error(apiErrorMessage(data.detail, "No se pudo cargar el archivo"));
       if (data.kind === "text_corpus") {
-        setToast({ tone: "success", text: `${file.name} cargado como corpus textual: ${data.rows} documentos. Ya puedes construir SPIMI.` });
-        setView("text");
+        if (typeof data.sql === "string") setSql(data.sql);
+        setToast({ tone: "success", text: `${file.name} cargado: ${data.rows} documentos. SQL de tabla e importación generado; pulsa EJECUTAR.` });
+        setView("queries");
         return;
       }
       const stem = file.name.replace(/\.(csv|jsonl?)$/i, "").replace(/[^A-Za-z0-9_]+/g, "_").toLowerCase();
