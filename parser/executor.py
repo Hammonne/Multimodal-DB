@@ -14,6 +14,7 @@ Resuelve las tres traducciones que faltaban:
 
 import sys
 import os
+import csv
 import json
 import math
 import time
@@ -231,6 +232,67 @@ class ExecuteVisitor(Visitor):
 
             tabla.insert(valores, mutation_logger=self._mutation_logger())
         self.resultado = Resultado("1 fila insertada")
+
+    def visit_import_csv_stmt(self, stm):
+        """Carga un CSV generado por los scripts en una tabla ya creada."""
+        archivo = os.path.abspath(stm.archivo)
+        if not os.path.isfile(archivo):
+            raise ExecutionError(f"no existe el archivo CSV: {archivo}")
+        with self._table_locks([stm.tabla], LockMode.EXCLUSIVE):
+            tabla = self._abrir(stm.tabla)
+            with open(archivo, newline="", encoding="utf-8-sig") as handle:
+                reader = csv.DictReader(handle)
+                if not reader.fieldnames:
+                    raise ExecutionError("el CSV no tiene encabezado")
+                expected = list(tabla.column_names)
+                missing = [name for name in expected if name not in reader.fieldnames]
+                if missing:
+                    raise ExecutionError(
+                        "faltan columnas en el CSV: " + ", ".join(missing)
+                    )
+                inserted = 0
+                for line_number, row in enumerate(reader, start=2):
+                    try:
+                        values = [
+                            self._csv_value(row[name], tabla.schema[pos])
+                            for pos, name in enumerate(expected)
+                        ]
+                        tabla.insert(values, mutation_logger=self._mutation_logger())
+                        inserted += 1
+                    except Exception as exc:
+                        detail = str(exc)
+                        if "format requires" in detail and "number" in detail:
+                            detail += (
+                                " (el identificador es demasiado grande para INT; "
+                                "recree la tabla con esa columna como VARCHAR)"
+                            )
+                        raise ExecutionError(
+                            f"error en {archivo}, línea {line_number}: {detail}"
+                        ) from exc
+        self.resultado = Resultado(
+            f"{inserted} fila(s) importada(s) desde '{stm.archivo}'"
+        )
+
+    @staticmethod
+    def _csv_value(value, schema):
+        value = "" if value is None else value.strip()
+        normalized = schema.lower()
+        if normalized == "integer":
+            return int(value)
+        if normalized == "float":
+            return float(value)
+        if normalized == "bool":
+            if value.lower() in {"true", "1", "t", "yes"}:
+                return True
+            if value.lower() in {"false", "0", "f", "no"}:
+                return False
+            raise ValueError(f"booleano inválido: {value!r}")
+        if normalized == "point":
+            parts = value.strip("()").split(",")
+            if len(parts) != 2:
+                raise ValueError(f"POINT inválido: {value!r}")
+            return (float(parts[0]), float(parts[1]))
+        return value
 
     def visit_select_stmt(self, stm):
         nombres_bloqueados = [stm.tabla]

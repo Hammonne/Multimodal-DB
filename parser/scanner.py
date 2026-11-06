@@ -47,6 +47,7 @@ PALABRAS_RESERVADAS = {
     # DML
     "SELECT": Token.Type.SELECT,
     "FROM": Token.Type.FROM,
+    "AS": Token.Type.AS,
     "JOIN": Token.Type.JOIN,
     "WHERE": Token.Type.WHERE,
     "GROUP": Token.Type.GROUP,
@@ -56,7 +57,9 @@ PALABRAS_RESERVADAS = {
     "DESC": Token.Type.DESC,
     "LIMIT": Token.Type.LIMIT,
     "INSERT": Token.Type.INSERT,
+    "IMPORT": Token.Type.IMPORT,
     "INTO": Token.Type.INTO,
+    "CSV": Token.Type.CSV,
     "VALUES": Token.Type.VALUES,
     "DELETE": Token.Type.DELETE,
     "UPDATE": Token.Type.UPDATE,
@@ -84,6 +87,12 @@ PALABRAS_RESERVADAS = {
     "POLYGON": Token.Type.POLYGON,
     "DENTRO_DE": Token.Type.DENTRO_DE,
     "RTREE": Token.Type.RTREE,
+    "IVF": Token.Type.IVF,
+    "HNSW": Token.Type.HNSW,
+    "SIMILAR_TO": Token.Type.SIMILAR_TO,
+    "SIMILARITY_SCORE": Token.Type.SIMILARITY_SCORE,
+    "WITH": Token.Type.WITH,
+    "METRIC": Token.Type.METRIC,
 
     # Busqueda por similitud (2.4.3)
     "SIMILAR_TO": Token.Type.SIMILAR_TO,

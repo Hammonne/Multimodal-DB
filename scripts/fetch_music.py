@@ -9,6 +9,7 @@ import json
 import os
 import random
 import re
+import ssl
 import threading
 import time
 import unicodedata
@@ -18,8 +19,16 @@ import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+try:
+    import certifi
+except ImportError as exc:
+    raise RuntimeError(
+        "falta certifi; instala la dependencia con: python3 -m pip install certifi"
+    ) from exc
+
 USER_AGENT = ("chutadb-dataset/0.1 (proyecto academico BD2 UTEC; "
               "https://github.com/Hammonne/Multimodal-DB)")
+SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 # géneros de deezer que se usan como semilla: (id, nombre)
 GENRES = [
@@ -70,7 +79,7 @@ def http_get(url, binary=False, retries=3, timeout=30):
             THROTTLES[host].wait()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=timeout, context=SSL_CONTEXT) as r:
                 data = r.read()
             if binary:
                 return data

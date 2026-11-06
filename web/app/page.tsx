@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { DragEvent } from "react";
 import dynamic from "next/dynamic";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleStop, Copy, Database, FileBox, History, LockKeyhole, Play, RefreshCw, RotateCcw, Search, Table2, Terminal, X, Zap } from "lucide-react";
 import styles from "./page.module.css";
@@ -16,7 +17,7 @@ type MultimediaResponse = { results: MultimediaResult[]; duration_ms: number; bu
 type BenchmarkRow = { tipo: string; n: number; metrica: string; indice: string; construir_s: number; consulta_ms: number; recall10: number; espacio_kb: number };
 type BenchmarkQuality = { tipo: string; indice: string; metrica: string; cambio: string; recall10_original: number };
 type BenchmarkCase = { cambio: string; objetivo: number; rank: number; resultados: number[] };
-type BenchmarkResponse = { filas: BenchmarkRow[]; calidad: BenchmarkQuality[]; tamanos: number[]; k: number; nq: number; parametros: Record<string, string | number>; galeria: Record<string, BenchmarkCase[]> };
+type BenchmarkResponse = { filas: BenchmarkRow[]; calidad: BenchmarkQuality[]; tamanos: number[] | Record<string, number[]>; k: number; nq: number; parametros: Record<string, string | number>; galeria: Record<string, BenchmarkCase[]> };
 type GinRow = { n: number; consulta_tipo: string; consulta: string; construir_s: number; consulta_ms: number; resultados: number; espacio_bytes: number };
 type GinResponse = { algoritmo: string; tamanos: number[]; filas: GinRow[] };
 type TableInfo = { name: string; file_type: string; key_index: number; columns: Column[]; indexes: { index_name: string; index_type: string; column_name: string }[] };
@@ -201,7 +202,7 @@ function BenchmarkPanel() {
           <div className={styles.catalogHint}><span>IVF vs HNSW · Recall@10 · tiempos · espacio en disco</span></div>
           <div className={styles.queryActions}><button className={styles.runButton} onClick={loadBenchmark} disabled={loading}><RefreshCw size={14} /> {loading ? "CARGANDO" : "CARGAR MULTIMEDIA"}</button><button className={styles.secondaryButton} onClick={loadGin} disabled={loading}><Database size={14} /> CARGAR GIN</button></div>
           {message && <div className={styles.catalogHint}><AlertCircle size={15} /><span>{message}</span></div>}
-          {benchmark && <div className={styles.planBody}><div className={styles.nodeDetails}><b>Tamaños:</b> {benchmark.tamanos.join(", ")} <b>Consultas:</b> {benchmark.nq} <b>k:</b> {benchmark.k}</div></div>}
+          {benchmark && <div className={styles.planBody}><div className={styles.nodeDetails}><b>Tamaños:</b> {Array.isArray(benchmark.tamanos) ? benchmark.tamanos.join(", ") : Object.entries(benchmark.tamanos).map(([kind, sizes]) => `${kind}: ${sizes.join(", ")}`).join(" · ")} <b>Consultas:</b> {benchmark.nq} <b>k:</b> {benchmark.k}</div></div>}
         </div>
       </section>
       <section className={`${styles.panel} ${styles.resultsPanel}`}>
@@ -241,6 +242,8 @@ export default function Home() {
   const [transactionDetail, setTransactionDetail] = useState<TransactionDetail | null>(null);
   const [spatialPoints, setSpatialPoints] = useState<SpatialPoint[]>([]);
   const [demoRunning, setDemoRunning] = useState(false);
+  const [csvDragging, setCsvDragging] = useState(false);
+  const [csvUploading, setCsvUploading] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<AbortController | null>(null);
@@ -304,6 +307,58 @@ export default function Home() {
     if (gutterRef.current && editorRef.current) gutterRef.current.scrollTop = editorRef.current.scrollTop;
   }
   function copySql() { void navigator.clipboard?.writeText(sql); setToast({ tone: "info", text: "SQL copiado al portapapeles" }); }
+
+  async function uploadCsv(file: File) {
+    const isCsv = file.name.toLowerCase().endsWith(".csv");
+    const isJson = /\.(json|jsonl)$/i.test(file.name);
+    if (!isCsv && !isJson) {
+      setToast({ tone: "error", text: "Solo se pueden cargar archivos CSV, JSON o JSONL" });
+      return;
+    }
+    setCsvUploading(true);
+    try {
+      const content = await file.arrayBuffer();
+      let binary = "";
+      new Uint8Array(content).forEach((byte) => { binary += String.fromCharCode(byte); });
+      const response = await fetch(`${API}/api/import/csv`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, content_base64: btoa(binary) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ?? "No se pudo cargar el CSV");
+      if (data.kind === "text_corpus") {
+        setToast({ tone: "success", text: `${file.name} cargado como corpus textual: ${data.rows} documentos. Ya puedes construir SPIMI.` });
+        setView("text");
+        return;
+      }
+      const stem = file.name.replace(/\.(csv|jsonl?)$/i, "").replace(/[^A-Za-z0-9_]+/g, "_").toLowerCase();
+      const tableName = `demo_${stem}`;
+      let primaryKeyAssigned = false;
+      const columns = (data.columns as { name: string; type: string }[])
+        .map((column) => {
+          const safeName = column.name.replace(/[^A-Za-z0-9_]/g, "_").toLowerCase();
+          const isPrimaryKey = !primaryKeyAssigned && (safeName === "id" || safeName.endsWith("_id"));
+          if (isPrimaryKey) primaryKeyAssigned = true;
+          return `  ${safeName} ${column.type}${isPrimaryKey ? " PRIMARY KEY" : ""}`;
+        })
+        .join(",\n");
+      setSql(`CREATE TABLE ${tableName} (\n${columns}\n) USING HEAP;\n\nIMPORT INTO ${tableName} FROM '${data.path}';`);
+      setToast({ tone: "success", text: `${file.name} analizado: ${data.columns.length} columnas y ${data.rows} filas. SQL generado.` });
+    } catch (uploadError) {
+      setToast({ tone: "error", text: uploadError instanceof Error ? uploadError.message : "Error al cargar CSV" });
+    } finally {
+      setCsvUploading(false);
+      setCsvDragging(false);
+    }
+  }
+
+  function handleCsvDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setCsvDragging(false);
+    const file = event.dataTransfer.files[0];
+    if (file) void uploadCsv(file);
+  }
 
   useEffect(() => {
     loadTables();
@@ -476,7 +531,7 @@ export default function Home() {
 
           <section className={`${styles.panel} ${styles.planPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>02 / ANALYSIS</span><h2 className={styles.panelTitle}>Plan de ejecución</h2></div><span className={styles.costTag}>{result.plan.length ? `${result.plan.length} NODOS` : "IDLE"}</span></div><div className={styles.planBody}>{result.plan.length ? <div className={styles.planTree}>{result.plan.map((node, index) => <div className={styles.planNode} key={`${node.node}-${index}`}><div className={styles.nodeLine}><span className={styles.nodeIndex}>{String(index + 1).padStart(2, "0")}</span><strong>{node.node}</strong><span className={styles.nodeOp}>{node.operation}</span></div><div className={styles.nodeDetails}>{node.table && <span>TABLE <b>{node.table}</b></span>}{node.column && <span>COLUMN <b>{node.column}</b></span>}{node.index && <span>ACCESS <b>{node.index} / {node.access}</b></span>}{node.rows !== undefined && <span>ROWS <b>{node.rows}</b></span>}</div></div>)}</div> : <div className={styles.empty}><Zap size={25} /><p>El plan aparecerá después de ejecutar una consulta.</p></div>}</div></section>
 
-          <section className={`${styles.panel} ${styles.queryPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>03 / WORKSPACE</span><h2 className={styles.panelTitle}>Consultas</h2></div><div className={styles.queryActions}><button className={styles.iconButton} onClick={copySql} title="Copiar SQL"><Copy size={14} /></button>{loading && <button className={styles.stopButton} onClick={cancelQuery}><CircleStop size={14} /> PARAR</button>}<button className={styles.runButton} onClick={() => runQuery()} disabled={loading}><Play size={14} fill="currentColor" /> {loading ? "EJECUTANDO" : "EJECUTAR"}<kbd className={styles.shortcut}>⌘ ↵</kbd></button></div></div><div className={styles.editorWrap}><div className={styles.editorGutter} ref={gutterRef}>{sql.split("\n").map((_, index) => <span key={index}>{String(index + 1).padStart(2, "0")}</span>)}</div><textarea ref={editorRef} className={styles.editorInput} aria-label="Editor de consulta SQL" spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)} onScroll={syncEditorScroll} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") runQuery(); }} /></div><div className={styles.queryMeta}><span><Terminal size={13} /> SQL / ANSI-LIKE</span><span>{sql.length} caracteres {duration !== null && `· ${duration.toFixed(0)} ms`}</span></div>{error && <div className={styles.error}><AlertCircle size={15} /><span>{error}</span></div>}{history.length > 0 && <div className={styles.historyStrip}><History size={13} /><span>HISTORIAL</span>{history.slice(0, 3).map((item, index) => <button key={`${item.at}-${index}`} onClick={() => setSql(item.sql)} className={item.status === "error" ? styles.historyError : ""}>{item.at} · {item.rows} filas</button>)}</div>}</section>
+          <section className={`${styles.panel} ${styles.queryPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>03 / WORKSPACE</span><h2 className={styles.panelTitle}>Consultas</h2></div><div className={styles.queryActions}><button className={styles.iconButton} onClick={copySql} title="Copiar SQL"><Copy size={14} /></button>{loading && <button className={styles.stopButton} onClick={cancelQuery}><CircleStop size={14} /> PARAR</button>}<button className={styles.runButton} onClick={() => runQuery()} disabled={loading}><Play size={14} fill="currentColor" /> {loading ? "EJECUTANDO" : "EJECUTAR"}<kbd className={styles.shortcut}>⌘ ↵</kbd></button></div></div><div className={styles.editorWrap}><div className={styles.editorGutter} ref={gutterRef}>{sql.split("\n").map((_, index) => <span key={index}>{String(index + 1).padStart(2, "0")}</span>)}</div><textarea ref={editorRef} className={styles.editorInput} aria-label="Editor de consulta SQL" spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)} onScroll={syncEditorScroll} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") runQuery(); }} /></div><div className={styles.csvDropzone} onDragOver={(event) => { event.preventDefault(); setCsvDragging(true); }} onDragLeave={() => setCsvDragging(false)} onDrop={handleCsvDrop}><input id="csv-upload" type="file" accept=".csv,.json,.jsonl,text/csv,application/json" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadCsv(file); event.currentTarget.value = ""; }} /><label htmlFor="csv-upload"><FileBox size={15} /> {csvUploading ? "CARGANDO ARCHIVO..." : csvDragging ? "SUELTA EL ARCHIVO AQUÍ" : "ARRASTRA CSV, JSON O JSONL AQUÍ O HAZ CLIC"}</label></div><div className={styles.queryMeta}><span><Terminal size={13} /> SQL / ANSI-LIKE</span><span>{sql.length} caracteres {duration !== null && `· ${duration.toFixed(0)} ms`}</span></div>{error && <div className={styles.error}><AlertCircle size={15} /><span>{error}</span></div>}{history.length > 0 && <div className={styles.historyStrip}><History size={13} /><span>HISTORIAL</span>{history.slice(0, 3).map((item, index) => <button key={`${item.at}-${index}`} onClick={() => setSql(item.sql)} className={item.status === "error" ? styles.historyError : ""}>{item.at} · {item.rows} filas</button>)}</div>}</section>
 
           <section className={`${styles.panel} ${styles.resultsPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>04 / OUTPUT</span><h2 className={styles.panelTitle}>Resultados <em className={styles.resultCount}>{result.row_count ? `${result.row_count} filas` : ""}</em></h2></div><div className={styles.searchBadge}><Search size={14} /> <span>{result.columns.length ? "QUERY COMPLETE" : "WAITING"}</span></div></div><div className={styles.resultTableWrap}>{result.columns.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}>{result.columns.map((column) => <th className={styles.resultHeader} key={column}>{column}</th>)}</tr></thead><tbody>{visibleRows.map((row, rowIndex) => <tr className={styles.resultRow} key={rowIndex}>{row.map((value, valueIndex) => <td className={styles.resultCell} key={valueIndex}>{String(value ?? "NULL")}</td>)}</tr>)}</tbody></table> : <div className={styles.empty}><Table2 size={25} /><p>{result.message}</p></div>}</div>{result.columns.length > 0 && <div className={styles.pagination}><span>ROWS {page * pageSize + 1}-{Math.min((page + 1) * pageSize, result.rows.length)} / {result.rows.length}</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>PREV</button><b>{String(page + 1).padStart(2, "0")} / {String(pageCount).padStart(2, "0")}</b><button disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)}>NEXT</button></div></div>}</section>
           <section className={`${styles.panel} ${styles.spatialPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>05 / SPATIAL</span><h2 className={styles.panelTitle}>Mapa de puntos</h2></div><span className={styles.costTag}>{spatialPoints.length ? `${spatialPoints.length} PUNTOS` : "SIN DATOS"}</span></div><MapPanel points={spatialPoints} selectedTable={selected} /></section>

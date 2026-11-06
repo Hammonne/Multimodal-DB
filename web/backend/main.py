@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import base64
+import csv
+import io
+import re
 import sys
 import re
 import time
@@ -29,6 +33,23 @@ from web.backend.multimedia_search import multimedia_search  # noqa: E402
 class QueryRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=100_000)
 
+
+class CsvUploadRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=20_000_000)
+
+
+class CsvColumn(BaseModel):
+    name: str
+    type: str
+
+
+class CsvUploadResponse(BaseModel):
+    filename: str
+    path: str
+    columns: list[CsvColumn] = []
+    rows: int
+    kind: str = "csv"
 
 class QueryResponse(BaseModel):
     message: str = ""
@@ -78,6 +99,9 @@ app.add_middleware(
 
 _storage = StorageManager()
 _sessions: dict[str, ExecuteVisitor] = {}
+UPLOAD_DIR = ROOT / "data" / "uploads"
+SQL_INT_MIN = -(2**31)
+SQL_INT_MAX = 2**31 - 1
 
 
 def json_value(value: Any) -> Any:
@@ -112,6 +136,116 @@ def table_metadata(name: str, metadata: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/import/csv", response_model=CsvUploadResponse)
+def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
+    filename = Path(request.filename).name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".csv", ".json", ".jsonl"} or not re.fullmatch(
+        r"[A-Za-z0-9._-]+", filename
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="solo se permiten archivos CSV, JSON o JSONL con nombre simple",
+        )
+    try:
+        content = base64.b64decode(request.content_base64, validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="el contenido no es Base64 válido") from error
+    if len(content) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="el CSV supera el límite de 15 MB")
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise HTTPException(status_code=400, detail="el CSV debe estar codificado en UTF-8") from error
+    if suffix in {".json", ".jsonl"}:
+        try:
+            if suffix == ".json":
+                payload = json.loads(text)
+                records = payload if isinstance(payload, list) else [payload]
+            else:
+                records = [json.loads(line) for line in text.splitlines() if line.strip()]
+        except json.JSONDecodeError as error:
+            raise HTTPException(status_code=400, detail=f"JSON inválido: {error}") from error
+        if not records or not all(isinstance(record, dict) for record in records):
+            raise HTTPException(status_code=400, detail="el corpus JSON debe contener objetos")
+        normalized = []
+        for position, record in enumerate(records, start=1):
+            if "id" not in record:
+                raise HTTPException(status_code=400, detail=f"documento {position} no tiene id")
+            text_value = record.get("lyrics", record.get("text", ""))
+            if not isinstance(text_value, str) or not text_value.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"documento {position} no tiene lyrics o text",
+                )
+            normalized.append({
+                "id": record["id"],
+                "title": str(record.get("title", record.get("name", f"Documento {record['id']}"))),
+                "lyrics": text_value,
+            })
+        corpus_path = ROOT / "data" / "lyrics.jsonl"
+        corpus_path.parent.mkdir(parents=True, exist_ok=True)
+        with corpus_path.open("w", encoding="utf-8") as handle:
+            for record in normalized:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return CsvUploadResponse(
+            filename=filename,
+            path="data/lyrics.jsonl",
+            rows=len(normalized),
+            kind="text_corpus",
+        )
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames or any(not column for column in reader.fieldnames):
+        raise HTTPException(status_code=400, detail="el CSV debe tener un encabezado válido")
+    sample = list(reader)
+    if not sample:
+        raise HTTPException(status_code=400, detail="el CSV no contiene filas")
+
+    def infer_type(column: str) -> str:
+        values = [row.get(column, "").strip() for row in sample if row.get(column, "").strip()]
+        normalized_column = column.strip().lower()
+        if normalized_column == "id" or normalized_column.endswith("_id"):
+            # External identifiers (Deezer, albums, tracks, etc.) are not
+            # bounded by the storage engine's signed 32-bit INT.
+            max_length = max([len(value) for value in values] + [1])
+            return f"VARCHAR({min(max(max_length + 20, 32), 1000)})"
+        if values and all(value.lower() in {"true", "false", "1", "0", "t", "f", "yes", "no"} for value in values):
+            return "BOOL"
+        if values:
+            try:
+                integers = [int(value) for value in values]
+                if all(SQL_INT_MIN <= value <= SQL_INT_MAX for value in integers):
+                    return "INT"
+                # The storage engine's INT is a signed 32-bit value. Keep
+                # larger identifiers as text so their exact value is preserved.
+                max_length = max(len(value) for value in values)
+                return f"VARCHAR({min(max(max_length + 20, 32), 1000)})"
+            except ValueError:
+                try:
+                    [float(value) for value in values]
+                    return "FLOAT"
+                except ValueError:
+                    pass
+        max_length = max([len(value) for value in values] + [1])
+        return f"VARCHAR({min(max(max_length + 20, 32), 1000)})"
+
+    columns = [
+        {"name": column, "type": infer_type(column)}
+        for column in reader.fieldnames
+    ]
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target = UPLOAD_DIR / filename
+    target.write_bytes(content)
+    return CsvUploadResponse(
+        filename=filename,
+        path=f"data/uploads/{filename}",
+        columns=[CsvColumn(**column) for column in columns],
+        rows=len(sample),
+        kind="csv",
+    )
 
 
 @app.post("/api/text/index")

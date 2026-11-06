@@ -9,7 +9,7 @@ from ast_sql import (AggFun, AndCond, BetweenCond, BoolValue, ColRef,
                      SelectItem, SelectStmt, SortDir, StrValue,
                      TransactionStmt, UpdateStmt,
                      METRICAS_VECTORIALES, SimilarityScoreExpr,
-                     SimilarToExpr, VectorIndex)
+                     SimilarToExpr, VectorIndex, ImportCsvStmt)
 
 
 # En C++ esto era un runtime_error con la posicion pegada al mensaje.
@@ -112,6 +112,8 @@ class Parser:
             return self.parse_select()
         elif self.check(Token.Type.INSERT):
             return self.parse_insert()
+        elif self.check(Token.Type.IMPORT):
+            return self.parse_import_csv()
         elif self.check(Token.Type.DELETE):
             return self.parse_delete()
         elif self.check(Token.Type.UPDATE):
@@ -458,6 +460,22 @@ class Parser:
         if not self.match(Token.Type.RPAREN):
             self.error("se esperaba )")
         return ins
+
+    # IMPORT INTO tabla FROM 'data/archivo.csv'
+    def parse_import_csv(self):
+        self.match(Token.Type.IMPORT)
+        if not self.match(Token.Type.INTO):
+            self.error("se esperaba INTO")
+        stmt = ImportCsvStmt()
+        if not self.match(Token.Type.ID):
+            self.error("se esperaba el nombre de la tabla")
+        stmt.tabla = self.previous.text
+        if not self.match(Token.Type.FROM):
+            self.error("se esperaba FROM")
+        if not self.match(Token.Type.STR):
+            self.error("se esperaba la ruta del archivo CSV entre comillas")
+        stmt.archivo = self.previous.text
+        return stmt
 
     # Delete ::= DELETE FROM id WHERE Cond
     def parse_delete(self):

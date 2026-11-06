@@ -191,3 +191,26 @@ quedan como registro). Necesita `artist_types.csv`, así que va después de
 
 - Los previews de Deezer y las imágenes de Deezer y TheAudioDB tienen
   copyright: el dataset es solo para uso académico y no se redistribuye.
+
+## Corpus textual para la demo web
+
+La pestaña **Texto** espera un archivo local `data/lyrics.jsonl`. Como los
+datasets se excluyen del repositorio, se puede generar un corpus reproducible
+desde la raíz del proyecto:
+
+```bash
+python3 scripts/generate_text_corpus.py
+```
+
+El comando crea 100 000 documentos JSONL con `id`, `title` y `lyrics`. Para
+una prueba rápida:
+
+```bash
+python3 scripts/generate_text_corpus.py --documents 1000
+```
+
+También se puede usar un corpus propio:
+
+```bash
+TEXT_SEARCH_SOURCE=/ruta/al/corpus.jsonl ./run_web.sh
+```

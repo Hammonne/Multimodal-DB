@@ -439,6 +439,16 @@ class InsertStmt(Stmt):
         return visitor.visit_insert_stmt(self)
 
 
+# IMPORT INTO tabla FROM 'archivo.csv'
+class ImportCsvStmt(Stmt):
+    def __init__(self):
+        self.tabla = ""
+        self.archivo = ""
+
+    def accept(self, visitor):
+        return visitor.visit_import_csv_stmt(self)
+
+
 # DELETE FROM t WHERE cond
 class DeleteStmt(Stmt):
     def __init__(self):

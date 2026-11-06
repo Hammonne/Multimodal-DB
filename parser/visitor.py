@@ -82,6 +82,9 @@ class Visitor:
     def visit_insert_stmt(self, stm):
         raise NotImplementedError
 
+    def visit_import_csv_stmt(self, stm):
+        raise NotImplementedError
+
     def visit_delete_stmt(self, stm):
         raise NotImplementedError
 
@@ -305,6 +308,9 @@ class PrintVisitor(Visitor):
             v.accept(self)
             primero = False
         print(")", end="")
+
+    def visit_import_csv_stmt(self, stm):
+        print(f"IMPORT INTO {stm.tabla} FROM '{stm.archivo}'", end="")
 
     def visit_delete_stmt(self, stm):
         print("DELETE FROM " + stm.tabla + " WHERE ", end="")
