@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,8 @@ from parser import Parser  # noqa: E402
 from scanner import Scanner  # noqa: E402
 from executor import ExecuteVisitor  # noqa: E402
 from storage.storage_manager import StorageManager  # noqa: E402
+from web.backend.text_search import text_search  # noqa: E402
+from web.backend.multimedia_search import multimedia_search  # noqa: E402
 
 
 class QueryRequest(BaseModel):
@@ -35,6 +38,29 @@ class QueryResponse(BaseModel):
     row_count: int = 0
     affected_rows: int = 0
     duration_ms: float = 0
+
+
+class TextIndexRequest(BaseModel):
+    dataset: str = Field(default="1k")
+
+
+class TextSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=10_000)
+    algorithm: str = Field(default="bm25")
+    dataset: str = Field(default="1k")
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
+class MultimediaSearchRequest(BaseModel):
+    kind: str = Field(default="sift")
+    index: str = Field(default="hnsw")
+    metric: str = Field(default="coseno")
+    query_id: str = Field(min_length=1, max_length=500)
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
+BENCHMARK_DIR = ROOT / "benchmark" / "multimedia" / "graficas"
+TEXT_BENCHMARK_PATH = ROOT / "benchmark" / "text" / "results_gin.json"
 
 
 app = FastAPI(
@@ -86,6 +112,101 @@ def table_metadata(name: str, metadata: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/text/index")
+def build_text_index(request: TextIndexRequest) -> dict[str, Any]:
+    try:
+        return text_search.build(request.dataset)
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/text/search")
+def search_text(request: TextSearchRequest) -> dict[str, Any]:
+    try:
+        return text_search.search(
+            request.query,
+            request.algorithm,
+            request.dataset,
+            request.top_k,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/text/benchmarks")
+def text_benchmarks() -> dict[str, Any]:
+    if not TEXT_BENCHMARK_PATH.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"no existe el benchmark GIN: {TEXT_BENCHMARK_PATH}. "
+            "Ejecute python -m benchmark.text_gin.",
+        )
+    try:
+        return json.loads(TEXT_BENCHMARK_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=500, detail="results_gin.json no es JSON válido") from error
+
+
+@app.post("/api/multimedia/search")
+def search_multimedia(request: MultimediaSearchRequest) -> dict[str, Any]:
+    try:
+        return multimedia_search.search(
+            request.kind,
+            request.index,
+            request.metric,
+            request.query_id,
+            request.top_k,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/multimedia/benchmarks")
+def multimedia_benchmarks() -> dict[str, Any]:
+    result_path = BENCHMARK_DIR / "resultados.json"
+    if not result_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"no existe el benchmark multimedia: {result_path}",
+        )
+    try:
+        return json.loads(result_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=500, detail="resultados.json no es JSON válido") from error
+
+
+@app.get("/api/multimedia/benchmarks/gallery/{gallery_key}")
+def multimedia_benchmark_gallery(gallery_key: str) -> dict[str, Any]:
+    result_path = BENCHMARK_DIR / "resultados.json"
+    if not result_path.is_file():
+        raise HTTPException(status_code=404, detail="no existe resultados.json")
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=500, detail="resultados.json no es JSON válido") from error
+    gallery = payload.get("galeria", {}).get(gallery_key)
+    if gallery is None:
+        raise HTTPException(status_code=404, detail=f"galería inexistente: {gallery_key}")
+    asset_name = f"galeria_{gallery_key}.png"
+    return {
+        "key": gallery_key,
+        "cases": gallery,
+        "asset": asset_name if (BENCHMARK_DIR / asset_name).is_file() else None,
+    }
+
+
+@app.get("/api/multimedia/benchmarks/assets/{filename}")
+def multimedia_benchmark_asset(filename: str) -> FileResponse:
+    asset = (BENCHMARK_DIR / filename).resolve()
+    if asset.parent != BENCHMARK_DIR.resolve() or not asset.is_file():
+        raise HTTPException(status_code=404, detail="recurso de benchmark no encontrado")
+    return FileResponse(asset)
 
 
 @app.get("/api/tables")

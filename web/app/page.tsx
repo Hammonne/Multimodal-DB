@@ -9,6 +9,16 @@ import type { SpatialPoint } from "./MapPanel";
 const MapPanel = dynamic(() => import("./MapPanel"), { ssr: false });
 
 type Column = { name: string; type: string; position: number; primary_key: boolean };
+type TextResult = { rank: number; id: number; title: string; snippet: string; score: number; length: number | null };
+type TextSearchResponse = { results: TextResult[]; duration_ms: number; documents: number; terms: number; index_size_bytes: number; algorithm: string; dataset: string };
+type MultimediaResult = { rank: number; id: string; distance: number; is_query: boolean };
+type MultimediaResponse = { results: MultimediaResult[]; duration_ms: number; build_ms: number; documents: number; dimension: number; candidates: number; kind: string; index: string; metric: string };
+type BenchmarkRow = { tipo: string; n: number; metrica: string; indice: string; construir_s: number; consulta_ms: number; recall10: number; espacio_kb: number };
+type BenchmarkQuality = { tipo: string; indice: string; metrica: string; cambio: string; recall10_original: number };
+type BenchmarkCase = { cambio: string; objetivo: number; rank: number; resultados: number[] };
+type BenchmarkResponse = { filas: BenchmarkRow[]; calidad: BenchmarkQuality[]; tamanos: number[]; k: number; nq: number; parametros: Record<string, string | number>; galeria: Record<string, BenchmarkCase[]> };
+type GinRow = { n: number; consulta_tipo: string; consulta: string; construir_s: number; consulta_ms: number; resultados: number; espacio_bytes: number };
+type GinResponse = { algoritmo: string; tamanos: number[]; filas: GinRow[] };
 type TableInfo = { name: string; file_type: string; key_index: number; columns: Column[]; indexes: { index_name: string; index_type: string; column_name: string }[] };
 type PlanNode = { node: string; table?: string; index?: string; operation?: string; access?: string; column?: string; rows?: number };
 type QueryResult = { message: string; columns: string[]; rows: unknown[][]; plan: PlanNode[]; row_count: number; affected_rows?: number; duration_ms?: number };
@@ -20,6 +30,197 @@ type TransactionDetail = { transaction_id: number; status: string; last_lsn: num
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const starterSql = "SELECT *\nFROM ventas\nWHERE id BETWEEN 1 AND 10\nORDER BY id ASC\nLIMIT 25;";
 
+function TextSearchPanel() {
+  const [query, setQuery] = useState("base de datos vectorial");
+  const [algorithm, setAlgorithm] = useState("bm25");
+  const [dataset, setDataset] = useState("1k");
+  const [result, setResult] = useState<TextSearchResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function search() {
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API}/api/text/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, algorithm, dataset, top_k: 10 }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ?? "No se pudo ejecutar la búsqueda");
+      setResult(data);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Error de búsqueda");
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+
+  }
+
+  async function build() {
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API}/api/text/index`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataset }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ?? "No se pudo construir el índice");
+      setMessage(`Índice SPIMI listo: ${data.documents} documentos, ${data.terms} términos, ${data.build_ms.toFixed(0)} ms`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Error de construcción");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className={`${styles.workspace} ${styles.searchWorkspace}`}>
+      <section className={`${styles.panel} ${styles.queryPanel}`}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>05 / TEXT SEARCH</span><h2 className={styles.panelTitle}>Búsqueda textual</h2></div><div className={styles.searchBadge}><Search size={14} /> SPIMI</div></div>
+        <div className={styles.panelBody}>
+          <label className={styles.eyebrow} htmlFor="text-query">CONSULTA</label>
+          <textarea id="text-query" className={styles.editorInput} value={query} onChange={(event) => setQuery(event.target.value)} />
+          <div className={styles.queryMeta}>
+            <label>Algoritmo <select value={algorithm} onChange={(event) => setAlgorithm(event.target.value)}><option value="bm25">BM25</option><option value="tfidf">TF-IDF + Coseno</option></select></label>
+            <label>Dataset <select value={dataset} onChange={(event) => setDataset(event.target.value)}><option value="1k">1 000</option><option value="10k">10 000</option><option value="100k">100 000</option></select></label>
+          </div>
+          <div className={styles.queryActions}><button className={styles.secondaryButton} onClick={build} disabled={loading}><Zap size={14} /> CONSTRUIR ÍNDICE</button><button className={styles.runButton} onClick={search} disabled={loading || !query.trim()}><Play size={14} fill="currentColor" /> {loading ? "EJECUTANDO" : "BUSCAR"}</button></div>
+          {message && <div className={styles.catalogHint}><AlertCircle size={15} /><span>{message}</span></div>}
+        </div>
+      </section>
+      <section className={`${styles.panel} ${styles.resultsPanel}`}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>06 / RANKING</span><h2 className={styles.panelTitle}>Resultados <em className={styles.resultCount}>{result ? `${result.results.length} filas` : ""}</em></h2></div><div className={styles.searchBadge}><Search size={14} /> {result ? `${result.duration_ms.toFixed(2)} ms` : "WAITING"}</div></div>
+        {result && <div className={styles.queryMeta}><span>{result.algorithm.toUpperCase()} · {result.dataset} · {result.documents} documentos · {result.terms} términos</span><span>{(result.index_size_bytes / 1024).toFixed(1)} KB</span></div>}
+        <div className={styles.resultTableWrap}>{result?.results.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>#</th><th className={styles.resultHeader}>Documento</th><th className={styles.resultHeader}>Score</th><th className={styles.resultHeader}>Fragmento</th></tr></thead><tbody>{result.results.map((item) => <tr className={styles.resultRow} key={`${item.id}-${item.rank}`}><td className={styles.resultCell}>{item.rank}</td><td className={styles.resultCell}><b>{item.title}</b><br /><small>ID {item.id} · {item.length ?? 0} tokens</small></td><td className={styles.resultCell}>{item.score.toFixed(5)}</td><td className={styles.resultCell}>{item.snippet}</td></tr>)}</tbody></table> : <div className={styles.empty}><Search size={25} /><p>Construye un índice y ejecuta una consulta para ver el ranking.</p></div>}</div>
+      </section>
+    </div>
+  );
+}
+
+function MultimediaSearchPanel() {
+  const [kind, setKind] = useState("sift");
+  const [index, setIndex] = useState("hnsw");
+  const [metric, setMetric] = useState("coseno");
+  const [queryId, setQueryId] = useState("");
+  const [result, setResult] = useState<MultimediaResponse | null>(null);
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function search() {
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API}/api/multimedia/search`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, index, metric, query_id: queryId, top_k: 10 }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ?? "No se pudo ejecutar la búsqueda multimedia");
+      setResult(data);
+    } catch (error) {
+      setResult(null);
+      setMessage(error instanceof Error ? error.message : "Error de búsqueda");
+    } finally {
+      setLoading(false);
+    }
+
+  }
+
+  return (
+    <div className={`${styles.workspace} ${styles.searchWorkspace}`}>
+      <section className={`${styles.panel} ${styles.queryPanel}`}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>07 / MULTIMEDIA SEARCH</span><h2 className={styles.panelTitle}>Similitud multimedia</h2></div><div className={styles.searchBadge}><Search size={14} /> k-NN</div></div>
+        <div className={styles.panelBody}>
+          <label className={styles.eyebrow} htmlFor="multimedia-query">ID DEL OBJETO DE CONSULTA</label>
+          <input id="multimedia-query" className={styles.editorInput} placeholder="Ej. ruta de portada o track_id" value={queryId} onChange={(event) => setQueryId(event.target.value)} />
+          <div className={styles.queryMeta}>
+            <label>Descriptor <select value={kind} onChange={(event) => setKind(event.target.value)}><option value="sift">SIFT / imagen</option><option value="mfcc">MFCC / audio</option></select></label>
+            <label>Índice <select value={index} onChange={(event) => setIndex(event.target.value)}><option value="hnsw">HNSW</option><option value="ivf">IVF</option></select></label>
+            <label>Métrica <select value={metric} onChange={(event) => setMetric(event.target.value)}><option value="coseno">Coseno</option><option value="euclidiana">Euclidiana</option><option value="producto_punto">Producto punto</option></select></label>
+          </div>
+          <div className={styles.queryActions}><button className={styles.runButton} onClick={search} disabled={loading || !queryId.trim()}><Play size={14} fill="currentColor" /> {loading ? "BUSCANDO" : "BUSCAR SIMILARES"}</button></div>
+          {message && <div className={styles.catalogHint}><AlertCircle size={15} /><span>{message}</span></div>}
+        </div>
+      </section>
+      <section className={`${styles.panel} ${styles.resultsPanel}`}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>08 / NEIGHBORS</span><h2 className={styles.panelTitle}>Vecinos encontrados</h2></div><div className={styles.searchBadge}><Search size={14} /> {result ? `${result.duration_ms.toFixed(2)} ms` : "WAITING"}</div></div>
+        {result && <div className={styles.queryMeta}><span>{result.index.toUpperCase()} · {result.metric} · {result.documents} objetos · {result.dimension} dimensiones</span><span>{result.candidates} candidatos</span></div>}
+        <div className={styles.resultTableWrap}>{result?.results.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>#</th><th className={styles.resultHeader}>Objeto</th><th className={styles.resultHeader}>Distancia</th><th className={styles.resultHeader}>Ground truth</th></tr></thead><tbody>{result.results.map((item) => <tr className={styles.resultRow} key={`${item.id}-${item.rank}`}><td className={styles.resultCell}>{item.rank}</td><td className={styles.resultCell}>{item.id}</td><td className={styles.resultCell}>{item.distance.toFixed(6)}</td><td className={styles.resultCell}>{item.is_query ? "CONSULTA" : "vecino"}</td></tr>)}</tbody></table> : <div className={styles.empty}><Search size={25} /><p>Indica un ID existente en la base de features para consultar sus vecinos.</p></div>}</div>
+      </section>
+    </div>
+  );
+}
+
+function BenchmarkPanel() {
+  const [benchmark, setBenchmark] = useState<BenchmarkResponse | null>(null);
+  const [gin, setGin] = useState<GinResponse | null>(null);
+  const [message, setMessage] = useState("Carga los resultados generados por benchmark_vectorial.py.");
+  const [loading, setLoading] = useState(false);
+  const [galleryKey, setGalleryKey] = useState("sift_hnsw_coseno");
+
+  async function loadBenchmark() {
+    setLoading(true);
+    try {
+      const response = await fetch(`${API}/api/multimedia/benchmarks`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ?? "No se pudo cargar el benchmark");
+      setBenchmark(data);
+      setMessage("");
+    } catch (error) {
+      setBenchmark(null);
+      setMessage(error instanceof Error ? error.message : "Error de benchmark");
+    } finally {
+      setLoading(false);
+    }
+
+  }
+
+  async function loadGin() {
+    setLoading(true);
+    try {
+      const response = await fetch(`${API}/api/text/benchmarks`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ?? "No se pudo cargar GIN");
+      setGin(data);
+      setMessage("");
+    } catch (error) {
+      setGin(null);
+      setMessage(error instanceof Error ? error.message : "GIN todavía no está disponible");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className={`${styles.workspace} ${styles.searchWorkspace}`}>
+      <section className={`${styles.panel} ${styles.queryPanel}`}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>09 / EXPERIMENT</span><h2 className={styles.panelTitle}>Comparación experimental</h2></div><div className={styles.searchBadge}><Zap size={14} /> BENCHMARK</div></div>
+        <div className={styles.panelBody}>
+          <div className={styles.catalogHint}><span>IVF vs HNSW · Recall@10 · tiempos · espacio en disco</span></div>
+          <div className={styles.queryActions}><button className={styles.runButton} onClick={loadBenchmark} disabled={loading}><RefreshCw size={14} /> {loading ? "CARGANDO" : "CARGAR MULTIMEDIA"}</button><button className={styles.secondaryButton} onClick={loadGin} disabled={loading}><Database size={14} /> CARGAR GIN</button></div>
+          {message && <div className={styles.catalogHint}><AlertCircle size={15} /><span>{message}</span></div>}
+          {benchmark && <div className={styles.planBody}><div className={styles.nodeDetails}><b>Tamaños:</b> {benchmark.tamanos.join(", ")} <b>Consultas:</b> {benchmark.nq} <b>k:</b> {benchmark.k}</div></div>}
+        </div>
+      </section>
+      <section className={`${styles.panel} ${styles.resultsPanel}`}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>10 / EVIDENCE</span><h2 className={styles.panelTitle}>Resultados del benchmark</h2></div><div className={styles.searchBadge}>{benchmark ? `${benchmark.filas.length} filas` : "WAITING"}</div></div>
+        <div className={styles.resultTableWrap}>{benchmark?.filas.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>Tipo</th><th className={styles.resultHeader}>N</th><th className={styles.resultHeader}>Índice</th><th className={styles.resultHeader}>Métrica</th><th className={styles.resultHeader}>Build (s)</th><th className={styles.resultHeader}>Consulta (ms)</th><th className={styles.resultHeader}>Recall@10</th><th className={styles.resultHeader}>KB</th></tr></thead><tbody>{benchmark.filas.map((row, i) => <tr className={styles.resultRow} key={`${row.tipo}-${row.n}-${row.indice}-${row.metrica}-${i}`}><td className={styles.resultCell}>{row.tipo}</td><td className={styles.resultCell}>{row.n}</td><td className={styles.resultCell}>{row.indice}</td><td className={styles.resultCell}>{row.metrica}</td><td className={styles.resultCell}>{row.construir_s.toFixed(2)}</td><td className={styles.resultCell}>{row.consulta_ms.toFixed(2)}</td><td className={styles.resultCell}>{row.recall10.toFixed(3)}</td><td className={styles.resultCell}>{row.espacio_kb.toFixed(0)}</td></tr>)}</tbody></table> : <div className={styles.empty}><Zap size={25} /><p>Ejecuta el benchmark multimedia para mostrar evidencia experimental.</p></div>}</div>
+      </section>
+      <section className={`${styles.panel} ${styles.resultsPanel}`} style={{ gridColumn: "1 / -1" }}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>12 / TEXT BASELINE</span><h2 className={styles.panelTitle}>PostgreSQL GIN</h2></div><div className={styles.searchBadge}>{gin ? `${gin.filas.length} filas` : "NO CARGADO"}</div></div>
+        <div className={styles.resultTableWrap}>{gin?.filas.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>N</th><th className={styles.resultHeader}>Consulta</th><th className={styles.resultHeader}>Build (s)</th><th className={styles.resultHeader}>Consulta (ms)</th><th className={styles.resultHeader}>Resultados</th><th className={styles.resultHeader}>Índice (KB)</th></tr></thead><tbody>{gin.filas.map((row, i) => <tr className={styles.resultRow} key={`${row.n}-${row.consulta_tipo}-${i}`}><td className={styles.resultCell}>{row.n}</td><td className={styles.resultCell}>{row.consulta_tipo}<br /><small>{row.consulta}</small></td><td className={styles.resultCell}>{row.construir_s.toFixed(2)}</td><td className={styles.resultCell}>{row.consulta_ms.toFixed(2)}</td><td className={styles.resultCell}>{row.resultados}</td><td className={styles.resultCell}>{(row.espacio_bytes / 1024).toFixed(1)}</td></tr>)}</tbody></table> : <div className={styles.empty}><Database size={25} /><p>Ejecuta el benchmark GIN y carga sus resultados para compararlo con SPIMI.</p></div>}</div>
+      </section>
+      <section className={`${styles.panel} ${styles.resultsPanel}`} style={{ gridColumn: "1 / -1" }}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>11 / GALLERY</span><h2 className={styles.panelTitle}>Aciertos y errores</h2></div><div className={styles.searchBadge}>RECALL@10</div></div>
+        <div className={styles.queryMeta}><label>Configuración <select value={galleryKey} onChange={(event) => setGalleryKey(event.target.value)}>{benchmark && Object.keys(benchmark.galeria).map((key) => <option value={key} key={key}>{key}</option>)}</select></label></div>
+        <div className={styles.resultTableWrap}>{benchmark?.galeria[galleryKey]?.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>Cambio</th><th className={styles.resultHeader}>Original</th><th className={styles.resultHeader}>Rank</th><th className={styles.resultHeader}>Top 5 recuperados</th></tr></thead><tbody>{benchmark.galeria[galleryKey].slice(0, 20).map((item, i) => <tr className={styles.resultRow} key={`${item.cambio}-${i}`}><td className={styles.resultCell}>{item.cambio}</td><td className={styles.resultCell}>{item.objetivo}</td><td className={styles.resultCell}>{item.rank ? `#${item.rank}` : "NO ENCONTRADO"}</td><td className={styles.resultCell}>{item.resultados.join(", ")}</td></tr>)}</tbody></table> : <div className={styles.empty}><Zap size={25} /><p>Carga el benchmark para mostrar los casos de galería.</p></div>}</div>
+      </section>
+    </div>
+  );
+}
+
 export default function Home() {
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -27,7 +228,7 @@ export default function Home() {
   const [result, setResult] = useState<QueryResult>({ message: "Ejecuta una consulta para ver sus resultados.", columns: [], rows: [], plan: [], row_count: 0 });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<"queries" | "transactions">("queries");
+  const [view, setView] = useState<"queries" | "transactions" | "text" | "multimedia" | "benchmarks">("queries");
   const [toast, setToast] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -240,6 +441,9 @@ export default function Home() {
         <div className={styles.brand}><div className={styles.brandMark}><Database size={19} /></div><div><strong>CHUTA DB</strong><span>QUERY TERMINAL / 01</span></div></div>
         <nav className={styles.viewTabs} aria-label="Vistas de la consola">
           <button className={view === "queries" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("queries")}><Terminal size={14} /> Consultas</button>
+          <button className={view === "text" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("text")}><Search size={14} /> Texto</button>
+          <button className={view === "multimedia" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("multimedia")}><FileBox size={14} /> Multimedia</button>
+          <button className={view === "benchmarks" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("benchmarks")}><Zap size={14} /> Benchmarks</button>
           <button className={view === "transactions" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("transactions")}><LockKeyhole size={14} /> Transacciones</button>
         </nav>
         <div className={styles.status}><span className={styles.statusDot} /> STORAGE ONLINE <span className={styles.divider} /> LOCAL INSTANCE</div>
@@ -256,6 +460,12 @@ export default function Home() {
             <aside className={styles.demoInspector}><div className={styles.inspectorTitle}><span className={styles.eyebrow}>RESUMEN</span><strong>{transactionDetail ? `TX-${transactionDetail.transaction_id}` : "Sin TX seleccionada"}</strong></div><div className={styles.demoCard}><span className={styles.eyebrow}>LOCK ACTUAL</span><div className={styles.lockRow}><b>{transactionDetail?.locks[0]?.resource ?? liveStatus?.locks[0]?.resource ?? "Ninguno"}</b><span className={styles.lockMode}>{transactionDetail?.locks[0]?.mode ?? liveStatus?.locks[0]?.mode ?? "-"}</span></div><small>{transactionDetail ? `Estado: ${transactionDetail.status}` : "Selecciona una TX real"}</small></div><div className={styles.demoCard}><span className={styles.eyebrow}>ÚLTIMO WAL</span><div className={styles.walLine}><b>LSN {transactionDetail?.last_lsn ?? liveStatus?.wal.at(-1)?.lsn ?? "-"}</b><span>{transactionDetail?.events.at(-1)?.type ?? liveStatus?.wal.at(-1)?.type ?? "-"}</span></div><small>{transactionDetail ? `${transactionDetail.events.length} eventos de esta TX` : "Los eventos aparecen en la timeline"}</small></div><div className={styles.demoCard}><span className={styles.eyebrow}>RECOVERY</span><div className={styles.recoveryFacts}><b>{liveStatus?.recovery.clr_records ?? 0}</b><span>CLR generados</span><b>{liveStatus?.recovery.last_checkpoint ?? "-"}</b><span>último checkpoint</span></div></div></aside>
           </div>
         </div>
+      ) : view === "text" ? (
+        <TextSearchPanel />
+      ) : view === "multimedia" ? (
+        <MultimediaSearchPanel />
+      ) : view === "benchmarks" ? (
+        <BenchmarkPanel />
       ) : (
         <div className={styles.workspace}>
           <section className={`${styles.panel} ${styles.filesPanel}`}>

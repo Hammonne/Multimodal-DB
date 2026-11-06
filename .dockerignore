@@ -1,0 +1,14 @@
+.git
+.venv
+.venv-1
+web/node_modules
+web/.next
+__pycache__
+*.pyc
+*.pyo
+*.log
+data/features
+data/indexes
+benchmark/**/graficas/*.png
+benchmark/**/graficas/*.jpeg
+benchmark/**/graficas/*.jpg
