@@ -1,8 +1,8 @@
 # benchmark de la parte 4 (#11): ivf vs hnsw y euclidiana vs coseno, con k = 10
 # mide construcción, consulta, recall@10 contra la búsqueda exacta y espacio, para varios tamaños
 # también mira si encuentra la portada o canción original de una consulta modificada (galería)
-# uso: python -m benchmark.vectorial.benchmark_vectorial [--data data/sim_1k] [--tamanos ...] [--solo-graficas]
-# sin --tamanos elige solo según cuánta data haya: con 1k corre 250/500/750, con 10k 1000/2500/5000/10000
+# uso: python -m benchmark.multimedia.benchmark_vectorial [--data data/sim_1k] [--tamanos ...] [--solo-graficas]
+# sin --tamanos cada tipo elige según cuánta data tenga: 1k -> 250/500/750, 10k -> 1000...10000, 20k portadas -> hasta 20000
 import argparse
 import json
 import os
@@ -24,6 +24,8 @@ SALIDA = os.path.join(AQUI, "graficas")
 K, NQ = 10, 200
 METRICAS = ["coseno", "euclidiana"]
 INDICES = ["ivf", "hnsw"]
+# las mismas estructuras en librerías de c++, como referencia (1 hilo, igual que las nuestras)
+LIBRERIAS = ["faiss_ivf", "faiss_hnsw", "hnswlib"]
 NPROBE, M, EFC, EF = 10, 16, 100, 50
 
 
@@ -62,9 +64,63 @@ def tf_de(desc, cb):
 
 # índices
 
+class Libreria:
+    # faiss y hnswlib detrás de la misma interfaz que IVF y HNSW: buscar(q, k, param) y guardar(p)
+    def __init__(self, nombre, metrica, X):
+        self.nombre, self.coseno = nombre, metrica == "coseno"
+        X = self._prep(X)
+        n, d = X.shape
+        if nombre == "hnswlib":
+            import hnswlib
+            self.idx = hnswlib.Index(space="cosine" if self.coseno else "l2", dim=d)
+            self.idx.init_index(max_elements=n, ef_construction=EFC, M=M)
+            self.idx.set_num_threads(1)
+            self.idx.add_items(X)
+            return
+        import faiss
+        faiss.omp_set_num_threads(1)
+        tipo = faiss.METRIC_INNER_PRODUCT if self.coseno else faiss.METRIC_L2
+        if nombre == "faiss_hnsw":
+            self.idx = faiss.IndexHNSWFlat(d, M, tipo)
+            self.idx.hnsw.efConstruction = EFC
+        else:
+            cuant = faiss.IndexFlatIP(d) if self.coseno else faiss.IndexFlatL2(d)
+            self.idx = faiss.IndexIVFFlat(cuant, d, max(1, int(round(np.sqrt(n)))), tipo)
+            self.cuant = cuant          # que no lo borre el recolector de basura
+            self.idx.train(X)
+        self.idx.add(X)
+
+    def _prep(self, X):
+        # coseno = producto punto entre vectores normalizados
+        X = np.ascontiguousarray(np.atleast_2d(X), dtype=np.float32)
+        if self.coseno and self.nombre != "hnswlib":
+            X = X / np.maximum(np.linalg.norm(X, axis=1, keepdims=True), 1e-12)
+        return X
+
+    def buscar(self, q, k, param=None):
+        q = self._prep(q)
+        if self.nombre == "hnswlib":
+            self.idx.set_ef(max(param or EF, k))
+            return self.idx.knn_query(q, k=k)[0][0]
+        if self.nombre == "faiss_hnsw":
+            self.idx.hnsw.efSearch = max(param or EF, k)
+        else:
+            self.idx.nprobe = param or NPROBE
+        return self.idx.search(q, k)[1][0]
+
+    def guardar(self, p):
+        if self.nombre == "hnswlib":
+            self.idx.save_index(p)
+        else:
+            import faiss
+            faiss.write_index(self.idx, p)
+
+
 def construir(nombre, metrica, X):
     t0 = time.perf_counter()
-    if nombre == "ivf":
+    if nombre in LIBRERIAS:
+        idx = Libreria(nombre, metrica, X)
+    elif nombre == "ivf":
         idx = IVF(nlist=max(1, int(round(np.sqrt(len(X))))), metrica=metrica).entrenar(X).agregar(X)
     else:
         idx = HNSW(M=M, ef_construction=EFC, metrica=metrica).agregar(X)
@@ -72,6 +128,8 @@ def construir(nombre, metrica, X):
 
 
 def buscar(idx, q, k=K, param=None):
+    if isinstance(idx, Libreria):
+        return idx.buscar(q, k, param)
     if isinstance(idx, IVF):
         return idx.buscar(q, k, param or NPROBE)[0]
     return idx.buscar(q, k, param or EF)[0]
@@ -80,7 +138,7 @@ def buscar(idx, q, k=K, param=None):
 def espacio_kb(idx):
     # lo que ocupa guardado en disco: vectores + celdas o grafo
     with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "idx.npz")
+        p = os.path.join(d, "idx.bin" if isinstance(idx, Libreria) else "idx.npz")
         idx.guardar(p)
         return os.path.getsize(p) / 1024
 
@@ -132,11 +190,12 @@ def consultas_modificadas(tipo, n_base, n, rng):
 
 # experimento
 
-def experimento(tamanos):
+def experimento(tamanos_por_tipo):
     rng = np.random.default_rng(0)
-    n_max = max(tamanos)
     filas, curvas, calidad, galeria = [], [], [], {}
     for tipo in ("sift", "mfcc"):
+        tamanos = tamanos_por_tipo[tipo]
+        n_max = max(tamanos)
         tf_todo = tfs(tipo, n_max + NQ)
         tf_q = tf_todo[n_max:n_max + NQ]          # consultas que no están en ninguna base
         for n in tamanos:
@@ -150,7 +209,7 @@ def experimento(tamanos):
                 filas.append({"tipo": tipo, "n": n, "metrica": metrica, "indice": "lineal",
                               "construir_s": 0.0, "consulta_ms": ms_lineal, "recall10": 1.0,
                               "espacio_kb": X.nbytes / 1024})
-                for nombre in INDICES:
+                for nombre in INDICES + LIBRERIAS:
                     idx, t_build = construir(nombre, metrica, X)
                     ms, rec = medir_consultas(idx, Q, exacto)
                     filas.append({"tipo": tipo, "n": n, "metrica": metrica, "indice": nombre,
@@ -158,7 +217,7 @@ def experimento(tamanos):
                                   "espacio_kb": espacio_kb(idx)})
                     print(f"{tipo} n={n} {metrica} {nombre}: {t_build:.1f} s, {ms:.2f} ms, "
                           f"recall {rec:.3f}", flush=True)
-                    if n == n_max:
+                    if n == n_max and nombre in INDICES:
                         params = [1, 2, 5, 10, 20, 50] if nombre == "ivf" else [10, 20, 40, 80, 160]
                         for p in params:
                             ms_p, rec_p = medir_consultas(idx, Q, exacto, p)
@@ -166,7 +225,7 @@ def experimento(tamanos):
                                            "param": p, "consulta_ms": ms_p, "recall10": rec_p})
                         calidad_y_galeria(tipo, idx, nombre, metrica, idf, n, rng, calidad, galeria)
     return {"filas": filas, "curvas": curvas, "calidad": calidad, "galeria": galeria,
-            "tamanos": tamanos, "k": K, "nq": NQ,
+            "tamanos": tamanos_por_tipo, "k": K, "nq": NQ,
             "parametros": {"nprobe": NPROBE, "nlist": "sqrt(n)", "M": M,
                            "ef_construction": EFC, "ef_search": EF}}
 
@@ -240,11 +299,49 @@ def por_tamano(r, campo, archivo, titulo, eje_y, log=False, con_lineal=True):
     plt.close(fig)
 
 
+COLOR_FAMILIA = {"ivf": SERIES["ivf"], "faiss_ivf": SERIES["ivf"], "hnsw": SERIES["hnsw"],
+                 "faiss_hnsw": SERIES["hnsw"], "hnswlib": SERIES["hnsw"]}
+TRAZO_IMPL = {"ivf": "-", "hnsw": "-", "faiss_ivf": "--", "faiss_hnsw": "--", "hnswlib": ":"}
+MARCA_IMPL = {"ivf": "o", "hnsw": "o", "faiss_ivf": "s", "faiss_hnsw": "s", "hnswlib": "^"}
+NOMBRE_IMPL = {"ivf": "IVF nuestro", "hnsw": "HNSW nuestro", "faiss_ivf": "Faiss IVFFlat",
+               "faiss_hnsw": "Faiss HNSWFlat", "hnswlib": "hnswlib"}
+
+
+def contra_librerias(r):
+    # solo coseno: color = estructura (ivf azul, hnsw naranja), trazo = implementación
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+    if not any(f["indice"] in LIBRERIAS for f in r["filas"]):
+        return
+    fig, axes = plt.subplots(2, 3, figsize=(13, 7))
+    campos = [("construir_s", "construir (s, log)"), ("consulta_ms", "ms por consulta (log)"),
+              ("recall10", "recall@10")]
+    for fila, tipo in zip(axes, ("sift", "mfcc")):
+        for ax, (campo, eje) in zip(fila, campos):
+            for nombre in INDICES + LIBRERIAS:
+                pts = [f for f in r["filas"] if f["tipo"] == tipo and f["metrica"] == "coseno"
+                       and f["indice"] == nombre]
+                ax.plot([f["n"] for f in pts], [max(f[campo], 1e-3) for f in pts], TRAZO_IMPL[nombre],
+                        marker=MARCA_IMPL[nombre], color=COLOR_FAMILIA[nombre], label=NOMBRE_IMPL[nombre])
+            if campo != "recall10":
+                ax.set_yscale("log")
+                ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+                ax.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: ""))
+            ax.set_ylabel(eje)
+            ax.set_xlabel("objetos en la base")
+            ax.set_title(f"{TITULO[tipo]}", color=TINTA, fontsize=10, loc="left")
+    fig.suptitle("Nuestra implementación vs Faiss y hnswlib (coseno, 1 hilo, mismos M, ef, nlist y nprobe)",
+                 color=TINTA, fontsize=12, x=.01, ha="left")
+    leyenda_abajo(fig, axes[0])
+    fig.savefig(os.path.join(SALIDA, "nuestro_vs_librerias.png"), dpi=150)
+    plt.close(fig)
+
+
 def curvas(r):
     import matplotlib.pyplot as plt
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     lineal = {(f["tipo"], f["metrica"]): f["consulta_ms"] for f in r["filas"]
-              if f["indice"] == "lineal" and f["n"] == max(r["tamanos"])}
+              if f["indice"] == "lineal" and f["n"] == maximo(r, f["tipo"])}
     for ax, tipo in zip(axes, ("sift", "mfcc")):
         for metrica in METRICAS:
             for nombre in INDICES:
@@ -260,7 +357,7 @@ def curvas(r):
         ax.set_title(TITULO[tipo], color=TINTA, fontsize=11, loc="left")
         ax.set_xlabel("ms por consulta (log; línea gris = búsqueda lineal)")
         ax.set_ylabel("recall@10")
-    fig.suptitle(f"Recall vs tiempo con {max(r['tamanos'])} objetos (nprobe 1–50, ef_search 10–160)",
+    fig.suptitle(f"Recall vs tiempo con el tamaño más grande (nprobe 1–50, ef_search 10–160)",
                  color=TINTA, fontsize=12, x=.01, ha="left")
     leyenda_abajo(fig, axes)
     fig.savefig(os.path.join(SALIDA, "recall_vs_tiempo.png"), dpi=150)
@@ -314,7 +411,8 @@ def galeria(r, tipo, clave, archivo, n_casos=3):
     filas = [("acierto", c) for c in exitos] + [("error", c) for c in errores]
     if not filas:
         return
-    fig, axes = plt.subplots(len(filas), 6, figsize=(12, 2.3 * len(filas)), squeeze=False)
+    alto = 2.9 if tipo == "mfcc" else 2.5       # en audio cada título ocupa 3 líneas
+    fig, axes = plt.subplots(len(filas), 6, figsize=(12, alto * len(filas)), squeeze=False)
     for fila, (clase, c) in zip(axes, filas):
         def portada_y_texto(pos):
             if tipo == "sift":
@@ -348,17 +446,17 @@ def galeria(r, tipo, clave, archivo, n_casos=3):
     indice, metrica = clave.split("_")[1:]
     fig.suptitle(f"{TITULO[tipo]}: {indice.upper()} con {metrica}, aciertos arriba y errores abajo "
                  f"(verde = el original)", color=TINTA, fontsize=11, x=.01, ha="left")
-    fig.tight_layout()
-    fig.savefig(os.path.join(SALIDA, archivo), dpi=120)
+    fig.tight_layout(rect=(0, 0, 1, 1 - .35 / len(filas)), h_pad=1.2)
+    # son fotos de portadas: en jpg pesan ~10 veces menos que en png
+    fig.savefig(os.path.join(SALIDA, archivo), dpi=110, pil_kwargs={"quality": 82})
     plt.close(fig)
 
 
 def tabla_md(r):
-    n = max(r["tamanos"])
     lineas = ["| tipo | índice | métrica | construir (s) | consulta (ms) | recall@10 | espacio (KB) |",
               "|---|---|---|---|---|---|---|"]
     for f in r["filas"]:
-        if f["n"] == n:
+        if f["n"] == maximo(r, f["tipo"]):
             lineas.append(f"| {f['tipo']} | {f['indice']} | {f['metrica']} | {f['construir_s']:.1f} | "
                           f"{f['consulta_ms']:.2f} | {f['recall10']:.3f} | {f['espacio_kb']:.0f} |")
     return "\n".join(lineas)
@@ -379,21 +477,30 @@ def graficar(r):
     por_tamano(r, "espacio_kb", "espacio_vs_n.png", "Espacio en disco del índice", "KB (log)",
                log=True)
     curvas(r)
+    contra_librerias(r)
     barras_calidad(r)
     for tipo in ("sift", "mfcc"):
         for nombre in INDICES:
             for metrica in METRICAS:
                 galeria(r, tipo, f"{tipo}_{nombre}_{metrica}",
-                        f"galeria_{tipo}_{nombre}_{metrica}.png")
+                        f"galeria_{tipo}_{nombre}_{metrica}.jpg")
     with open(os.path.join(SALIDA, "tabla.md"), "w", encoding="utf-8") as f:
         f.write(tabla_md(r) + "\n")
 
 
-def tamanos_posibles():
+def maximo(r, tipo):
+    t = r["tamanos"]
+    return max(t[tipo] if isinstance(t, dict) else t)
+
+
+def tamanos_posibles(tipo):
     # lo que alcanza dejando NQ objetos aparte para las consultas
-    disponibles = min(len(objetos("sift")), len(objetos("mfcc"))) - NQ
+    disponibles = len(objetos(tipo)) - NQ
     if disponibles >= 10000:
-        return [1000, 2500, 5000, 10000]
+        fijos = [t for t in (1000, 2500, 5000, 10000, 20000, 50000, 100000) if t <= disponibles]
+        # si sobra bastante se agrega todo lo que hay (20 005 portadas - 200 consultas = 19 800)
+        resto = disponibles // 100 * 100
+        return fijos + ([resto] if resto >= fijos[-1] * 1.5 else [])
     n = disponibles // 250 * 250
     return [t for t in (n // 3 // 250 * 250, 2 * n // 3 // 250 * 250, n) if t > 0]
 
@@ -413,7 +520,7 @@ def main():
     os.makedirs(SALIDA, exist_ok=True)
     ruta = os.path.join(SALIDA, "resultados.json")
     if not args.solo_graficas:
-        tamanos = sorted(args.tamanos or tamanos_posibles())
+        tamanos = {t: sorted(args.tamanos or tamanos_posibles(t)) for t in ("sift", "mfcc")}
         print(f"data: {DATA}, tamaños: {tamanos}, consultas: {NQ}", flush=True)
         r = experimento(tamanos)
         with open(ruta, "w", encoding="utf-8") as f:

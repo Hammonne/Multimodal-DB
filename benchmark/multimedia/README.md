@@ -9,8 +9,8 @@ python -m benchmark.multimedia.benchmark_vectorial --data data/sim_1k   # con 1k
 python -m benchmark.multimedia.benchmark_vectorial --solo-graficas      # rehace las imágenes
 ```
 
-Sin `--tamanos` elige solo según la data que haya: con 10k corre 1 000, 2 500, 5 000 y 10 000
-objetos; con 1k corre 250, 500 y 750. Las imágenes y `resultados.json` van a `graficas/`
+Sin `--tamanos` cada tipo elige según la data que tenga: portadas 1 000, 2 500, 5 000, 10 000 y
+19 800; audio hasta 10 000; con `data/sim_1k` corre 250, 500 y 750. Las imágenes y `resultados.json` van a `graficas/`
 (o a `--salida`), junto con `resultados.json`.
 
 ## Cómo se mide
@@ -30,84 +30,88 @@ objetos; con 1k corre 250, 500 y 750. Las imágenes y `resultados.json` van a `g
   bajadas a 200 px en jpeg, y 100 canciones cortadas a 5 s (con y sin ruido). Se mira si el
   original sale entre los 10 primeros. Sale de ahí la galería.
 
-## Resultados con 10 000 objetos
+## Resultados
 
-La corrida completa (4 tamaños, 2 métricas, imágenes y audio, con las librerías) tarda
-**17 min 22 s** en un MacBook; lo que más pesa es construir nuestro HNSW en Python.
+Portadas hasta **19 800** (de las 20 005 se separan 200 como consultas) y audio hasta **10 000**.
+La corrida completa, con las librerías, tarda **27 min 26 s** en un MacBook; lo que más pesa es
+construir nuestro HNSW en Python (~3–4 min con 20k).
 
-| tipo | índice | métrica | construir (s) | consulta (ms) | recall@10 |
-|---|---|---|---|---|---|
-| portadas | lineal | coseno | — | 9.8 | 1.000 |
-| portadas | IVF | coseno | 3.7 | 1.6 | 0.903 |
-| portadas | HNSW | coseno | 92 | 1.5 | 0.980 |
-| portadas | lineal | euclidiana | — | 24.2 | 1.000 |
-| portadas | IVF | euclidiana | 4.2 | 10.7 | 0.966 |
-| portadas | HNSW | euclidiana | 116 | 2.0 | 0.961 |
-| audio | lineal | coseno | — | 10.1 | 1.000 |
-| audio | IVF | coseno | 3.5 | 1.7 | 0.922 |
-| audio | HNSW | coseno | 82 | 1.7 | 0.987 |
-| audio | lineal | euclidiana | — | 23.2 | 1.000 |
-| audio | IVF | euclidiana | 3.3 | 20.0 | 0.998 |
-| audio | HNSW | euclidiana | 144 | 2.0 | 0.983 |
+| tipo | n | índice | métrica | construir (s) | consulta (ms) | recall@10 |
+|---|---|---|---|---|---|---|
+| portadas | 19 800 | lineal | coseno | — | 14.1 | 1.000 |
+| portadas | 19 800 | IVF | coseno | 10.4 | 2.6 | 0.941 |
+| portadas | 19 800 | HNSW | coseno | 175 | 1.8 | 0.981 |
+| portadas | 19 800 | lineal | euclidiana | — | 52.1 | 1.000 |
+| portadas | 19 800 | IVF | euclidiana | 7.9 | 16.0 | 0.839 |
+| portadas | 19 800 | HNSW | euclidiana | 253 | 2.3 | 0.801 |
+| audio | 10 000 | lineal | coseno | — | 7.2 | 1.000 |
+| audio | 10 000 | IVF | coseno | 3.2 | 1.5 | 0.922 |
+| audio | 10 000 | HNSW | coseno | 81 | 1.7 | 0.987 |
+| audio | 10 000 | lineal | euclidiana | — | 23.3 | 1.000 |
+| audio | 10 000 | IVF | euclidiana | 3.6 | 19.3 | 0.998 |
+| audio | 10 000 | HNSW | euclidiana | 156 | 2.3 | 0.983 |
+
+Con 10 000 portadas: IVF coseno 3.3 s / 1.5 ms / 0.924 y HNSW coseno 100 s / 2.3 ms / 0.985.
 
 ![tiempo de construcción](graficas/construccion_vs_n.png)
 ![tiempo por consulta](graficas/consulta_vs_n.png)
 ![recall@10](graficas/recall_vs_n.png)
 
-El espacio es casi igual en todos (~40 MB): lo que pesa son los vectores (10 000 × 1 024 floats).
-Las celdas del IVF suman ~0.5 MB y el grafo del HNSW ~2 MB.
+El espacio crece lineal con N y es casi igual en todos: lo que pesa son los vectores
+(19 800 × 1 024 floats ≈ 77 MB). Las celdas del IVF suman ~0.7 MB y el grafo del HNSW ~4 MB.
 
 ![espacio](graficas/espacio_vs_n.png)
 
-¿Sale el original en el top 10?
+¿Sale el original en el top 10? (portadas con 19 800, audio con 10 000)
 
 | consulta | IVF coseno | IVF euclidiana | HNSW coseno | HNSW euclidiana |
 |---|---|---|---|---|
-| portada recortada 70 % | .69 | .73 | .78 | .63 |
-| portada oscurecida 60 % | .84 | .88 | .88 | .79 |
-| portada jpeg + 200 px | .44 | .32 | .45 | .23 |
+| portada recortada 70 % | .63 | .64 | .65 | .49 |
+| portada oscurecida 60 % | .88 | .90 | .90 | .82 |
+| portada jpeg + 200 px | .39 | .23 | .38 | .18 |
 | audio fragmento 5 s | .79 | .86 | .85 | .81 |
 | audio 5 s + ruido | .34 | .36 | .38 | .31 |
 
+Con el doble de portadas hay más candidatas parecidas y acierta un poco menos (recortada .78 con
+10k, .65 con 20k usando HNSW coseno).
+
 ![original en el top 10](graficas/calidad_original.png)
 
-### Contra Faiss y hnswlib (coseno, 10 000 objetos)
+### Contra Faiss y hnswlib (coseno)
 
-Las mismas estructuras en C++, con los mismos parámetros y 1 hilo (`nuestro_vs_librerias.png`):
+Las mismas estructuras en C++, con los mismos parámetros y 1 hilo:
 
-| | construir (s) | consulta (ms) | recall@10 portadas | recall@10 audio |
+| | construir 20k portadas (s) | consulta (ms) | recall@10 portadas 20k | recall@10 audio 10k |
 |---|---|---|---|---|
-| IVF nuestro | 3.6 | 1.6 | 0.903 | 0.922 |
-| Faiss IVFFlat | 0.1 | 0.14 | 0.915 | 0.912 |
-| HNSW nuestro | 82–92 | 1.5–1.7 | 0.980 | 0.987 |
-| Faiss HNSWFlat | 1.7–2.0 | 0.12 | 0.981 | 0.984 |
-| hnswlib | 15–17 | 0.87 | 0.978 | 0.978 |
+| IVF nuestro | 10.4 | 2.6 | 0.941 | 0.922 |
+| Faiss IVFFlat | 0.2 | 0.19 | 0.910 | 0.912 |
+| HNSW nuestro | 175 | 1.8 | 0.981 | 0.987 |
+| Faiss HNSWFlat | 4.6 | 0.15 | 0.970 | 0.984 |
+| hnswlib | 36.6 | 0.92 | 0.966 | 0.978 |
 
 ![nuestro vs librerías](graficas/nuestro_vs_librerias.png)
 
-El recall es el mismo: el algoritmo está bien implementado. La diferencia de tiempo es de
-lenguaje (Python vs C++ con SIMD): ~45 veces al construir el HNSW y ~12 veces al consultar.
+El recall es el mismo o mejor: el algoritmo está bien implementado. La diferencia de tiempo es
+de lenguaje (Python vs C++ con SIMD): ~40 veces al construir el HNSW y ~12 veces al consultar.
 
 ## Qué se ve
 
-- **HNSW es el más rápido al consultar** (~1.5–2 ms contra 10–24 ms de la búsqueda lineal) y casi no
-  crece con N: ~1.1–1.5 ms con 1k y ~1.5–2 ms con 10k. Lo caro es construirlo: ~90 s para 10k en
-  Python puro, contra ~3.5 s del IVF.
-- **IVF construye ~25 veces más rápido** pero con nprobe = 10 pierde más recall (0.90–0.92 con
-  coseno). Subiendo nprobe a 20 llega a 0.96–0.98 y sigue siendo 3–5 veces más rápido que lo lineal
-  (`recall_vs_tiempo.png`).
+- **HNSW es el más rápido al consultar** y casi no crece con N: ~1.5 ms con 1k y ~1.8 ms con 20k,
+  mientras la búsqueda lineal pasa de 0.7 a 14 ms. Lo caro es construirlo: ~3 min para 20k en
+  Python puro, contra ~10 s del IVF.
+- **IVF construye ~17 veces más rápido** pero con nprobe = 10 pierde más recall (0.92–0.94 con
+  coseno). Subiendo nprobe llega a 0.96–0.98 y sigue siendo varias veces más rápido que lo lineal.
 
   ![recall vs tiempo](graficas/recall_vs_tiempo.png)
-- **La euclidiana sobre vectores sin normalizar arruina el IVF.** Las normas van de 0 a 2.2
-  (mediana 0.1), así que K-Means agrupa por tamaño del vector y no por contenido: las 10 celdas
-  más grandes tienen el 66 % de la base (con coseno ninguna pasa de 205 vectores). Con nprobe = 10
-  termina revisando casi todo: recall alto pero casi tan lento como la búsqueda lineal.
-- **También afecta a los grafos de las librerías:** con euclidiana, Faiss HNSW baja a 0.84–0.91 de
-  recall y hnswlib a 0.86–0.92 (nuestro HNSW se mantiene en 0.96–0.98 gracias a la heurística de
-  selección de vecinos, aunque es mucho más lento).
-- **Coseno encuentra mejor el original con HNSW** (portada recortada .78 vs .63, jpeg .45 vs .23):
-  el tamaño del vector depende de cuántas palabras raras tiene la imagen, no de qué muestra, y
-  coseno lo ignora.
+
+- **La euclidiana sobre vectores sin normalizar empeora con N.** Las normas van de 0 a 2.2
+  (mediana 0.1), así que el vecino "más cercano" depende del tamaño del vector y no de lo que
+  muestra. En el IVF, K-Means agrupa por tamaño: con 10k las 10 celdas más grandes tienen el 66 %
+  de la base, y con nprobe = 10 termina revisando casi todo (16 ms, casi como lo lineal). Con 20k
+  portadas el recall con euclidiana cae a 0.80–0.84 en nuestros índices y a 0.73–0.85 en las
+  librerías, mientras con coseno se mantiene en 0.91–0.98.
+- **Coseno encuentra mejor el original** (jpeg chico .38 vs .18 con HNSW): coseno ignora el
+  tamaño del vector.
 - Las consultas difíciles (jpeg chico, audio con ruido) fallan igual en los cuatro: el límite ahí
   es el descriptor y el codebook, no el índice.
 
@@ -148,4 +152,5 @@ sirve para las tres métricas del `WITH METRIC`.
 | `resultados.json` | todos los números |
 
 El enunciado pide también 100 000 objetos. El dataset tiene 10 000 canciones y 20 005 portadas
-(`covers.csv`); esta corrida llega a 10k en los dos.
+(`covers.csv`), así que llega a 10k en audio y ~20k en imágenes. Si se bajan más portadas con
+`scripts/fetch_covers.py --total 100000`, el script sigue solo a 50k y 100k.
