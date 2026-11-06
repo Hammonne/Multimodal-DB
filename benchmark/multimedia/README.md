@@ -154,3 +154,9 @@ sirve para las tres métricas del `WITH METRIC`.
 El enunciado pide también 100 000 objetos. El dataset tiene 10 000 canciones y 20 005 portadas
 (`covers.csv`), así que llega a 10k en audio y ~20k en imágenes. Si se bajan más portadas con
 `scripts/fetch_covers.py --total 100000`, el script sigue solo a 50k y 100k.
+
+## Referencias
+
+- Johnson, J., Douze, M. y Jégou, H. (2021). Billion-scale similarity search with GPUs. *IEEE Transactions on Big Data*, 7(3), 535–547. (Faiss)
+- Malkov, Y. A. y Yashunin, D. A. (2020). Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs. *IEEE TPAMI*, 42(4), 824–836. (HNSW y hnswlib: https://github.com/nmslib/hnswlib)
+- Jégou, H., Douze, M. y Schmid, C. (2011). Product quantization for nearest neighbor search. *IEEE TPAMI*, 33(1), 117–128. (IVF)

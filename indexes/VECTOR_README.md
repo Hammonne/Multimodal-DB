@@ -89,7 +89,7 @@ Con 10k TF-IDF (nlist = 100, coseno, 200 consultas fuera de la base):
 
 ## HNSW (`hnsw.py`)
 
-Malkov y Yashunin (2018). Es el índice vectorial más usado (pgvector, Faiss, Pinecone...). Cada vector
+Malkov y Yashunin (2020). Es el índice vectorial más usado (pgvector, Faiss, Pinecone...). Cada vector
 es un nodo de un grafo conectado a sus vecinos más cercanos, y buscar es caminar por el grafo
 acercándose cada vez más a la consulta. Junta dos ideas:
 - **NSW**: un grafo donde cada vector está conectado a sus vecinos cercanos y a algunos lejanos, así
@@ -161,4 +161,12 @@ imágenes o audios crea un `VectorSecondaryIndex`, igual que el R-Tree se cuelga
   la tabla cambió con el índice cerrado, se reconstruye
 - Parámetros: IVF con nlist = 100 (o N si hay menos filas) y nprobe = 10; HNSW con M = 16, ef_construction = 100 y ef_search = 50
 
-La sintaxis SQL está en el [README principal](../README.md#parte-4-búsqueda-multimedia).
+La sintaxis SQL está en el [README principal](../README.md#sql-de-la-parte-4).
+
+## Referencias
+
+- Jégou, H., Douze, M. y Schmid, C. (2011). Product quantization for nearest neighbor search. *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 33(1), 117–128. (IVF)
+- Malkov, Y. A. y Yashunin, D. A. (2020). Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs. *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 42(4), 824–836. Publicado en línea en 2018, arXiv:1603.09320. (HNSW)
+- Malkov, Y., Ponomarenko, A., Logvinov, A. y Krylov, V. (2014). Approximate nearest neighbor algorithm based on navigable small world graphs. *Information Systems*, 45, 61–68. (NSW)
+- Pugh, W. (1990). Skip lists: a probabilistic alternative to balanced trees. *Communications of the ACM*, 33(6), 668–676.
+- Arthur, D. y Vassilvitskii, S. (2007). k-means++: the advantages of careful seeding. *SODA 2007*, 1027–1035.

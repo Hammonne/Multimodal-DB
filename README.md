@@ -203,6 +203,25 @@ python -m multimedia.features --tipo ambos --k 1024     # vectores TF-IDF de la 
 1. **Shazam:** reconocer la canción grabando unos segundos aunque haya ruido, con *audio fingerprinting* (picos del espectrograma como huella de la grabación, como hace Shazam). Se puede hacer con `librosa` o ver `audfprint` / `dejavu`
 2. **Detector cantando:** que alguien cante o tararee y diga qué canción es o cuál se parece más, con *query by humming*. Se saca la melodía con `librosa.pyin` y se compara con DTW (`librosa.sequence.dtw`), porque MFCC ignora la melodía a propósito
 
+### Referencias
+
+**Parte 4**
+- Lowe, D. G. (2004). Distinctive image features from scale-invariant keypoints. *International Journal of Computer Vision*, 60(2), 91–110.
+- Arandjelović, R. y Zisserman, A. (2012). Three things everyone should know to improve object retrieval. *CVPR 2012*, 2911–2918.
+- Sivic, J. y Zisserman, A. (2003). Video Google: a text retrieval approach to object matching in videos. *ICCV 2003*, 1470–1477.
+- Davis, S. y Mermelstein, P. (1980). Comparison of parametric representations for monosyllabic word recognition in continuously spoken sentences. *IEEE Transactions on Acoustics, Speech, and Signal Processing*, 28(4), 357–366.
+- Jégou, H., Douze, M. y Schmid, C. (2011). Product quantization for nearest neighbor search. *IEEE TPAMI*, 33(1), 117–128.
+- Malkov, Y. A. y Yashunin, D. A. (2020). Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs. *IEEE TPAMI*, 42(4), 824–836.
+
+La lista completa está al final de [`multimedia/README.md`](multimedia/README.md#referencias),
+[`indexes/VECTOR_README.md`](indexes/VECTOR_README.md#referencias) y
+[`benchmark/multimedia/README.md`](benchmark/multimedia/README.md#referencias).
+
+**Datos:** [Deezer API](https://developers.deezer.com/api), [LRCLIB](https://lrclib.net),
+[MusicBrainz](https://musicbrainz.org), [TheAudioDB](https://www.theaudiodb.com),
+[Wikidata](https://www.wikidata.org) y [Wikimedia Commons](https://commons.wikimedia.org). Los previews
+y las portadas tienen copyright: el dataset es solo para uso académico y no se redistribuye.
+
 ## Equipo
 
 Grupo 3 · Base de Datos II · UTEC · Prof. Heider Sanchez

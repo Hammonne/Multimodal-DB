@@ -211,3 +211,17 @@ Solo encuentra colores parecidos, no la misma portada, por eso la idea es sumarl
 Igual que en el Lab 11: ResNet de dlib vía `face_recognition`, 128 dimensiones, misma persona si la distancia es < 0.6. Usa la caja de la cara que guardó el filtro (`face_box`) así que no vuelve a detectar, y achica a 1000 px porque a resolución completa es ~10 veces más lento
 
 Sale en `faces.npz` con `embedding, path, kind, owner_id, name`. Es un vector por cara, no necesita codebook. Sirve para buscar por artista (Parte 5)
+
+## Referencias
+
+- Lowe, D. G. (2004). Distinctive image features from scale-invariant keypoints. *International Journal of Computer Vision*, 60(2), 91–110. (SIFT)
+- Arandjelović, R. y Zisserman, A. (2012). Three things everyone should know to improve object retrieval. *CVPR 2012*, 2911–2918. (RootSIFT)
+- Sivic, J. y Zisserman, A. (2003). Video Google: a text retrieval approach to object matching in videos. *ICCV 2003*, 1470–1477. (bag of visual words)
+- Davis, S. y Mermelstein, P. (1980). Comparison of parametric representations for monosyllabic word recognition in continuously spoken sentences. *IEEE Transactions on Acoustics, Speech, and Signal Processing*, 28(4), 357–366. (MFCC)
+- Lloyd, S. (1982). Least squares quantization in PCM. *IEEE Transactions on Information Theory*, 28(2), 129–137. (K-Means)
+- Arthur, D. y Vassilvitskii, S. (2007). k-means++: the advantages of careful seeding. *SODA 2007*, 1027–1035.
+- Sculley, D. (2010). Web-scale k-means clustering. *WWW 2010*, 1177–1178. (Mini-batch K-Means)
+- Salton, G. y Buckley, C. (1988). Term-weighting approaches in automatic text retrieval. *Information Processing & Management*, 24(5), 513–523. (TF-IDF)
+- Bradski, G. (2000). The OpenCV Library. *Dr. Dobb's Journal of Software Tools*.
+- McFee, B. et al. (2015). librosa: audio and music signal analysis in Python. *Proceedings of the 14th Python in Science Conference*, 18–25.
+- Pedregosa, F. et al. (2011). Scikit-learn: machine learning in Python. *Journal of Machine Learning Research*, 12, 2825–2830.
