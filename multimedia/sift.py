@@ -57,7 +57,11 @@ def imagenes(source, data=DATA):
     # [(path, tipo, id del dueño)] de portadas, artistas o integrantes
     # en artistas e integrantes solo las que aceptó el filtro de caras
     out = []
-    if source in ("covers", "all"):
+    portadas = leer_csv(os.path.join(data, "covers.csv"))
+    if source in ("covers", "all") and portadas:
+        # covers.csv: las de las canciones y las de fetch_covers.py, sin las repetidas
+        out += [(r["path"], "cover", r["album_id"]) for r in portadas if not r["duplicada_de"]]
+    elif source in ("covers", "all"):
         vistos = set()
         for s in leer_csv(os.path.join(data, "songs.csv")):
             if s["cover_path"] and s["cover_path"] not in vistos:

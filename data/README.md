@@ -34,11 +34,23 @@ Solo 6 388 de las 10 000 tenían letra en LRCLIB, así que después se corrió
 de su top y solo entran las que tienen letra, sin artistas ni fotos nuevas.
 Las nuevas van al final de `songs.csv`, las primeras 10 000 no cambian.
 
+Para tener más imágenes en la Parte 4, `scripts/fetch_covers.py --total 20000` baja
+portadas de otros álbumes de los mismos artistas (sin audio ni letra), una por vuelta por
+artista. Salta las ediciones del mismo álbum ("Deluxe", "Remastered", "Live"...) y las
+imágenes idénticas (mismo MD5). Todo queda en `covers.csv`.
+
 | | Total | Para los experimentos |
 |---|---|---|
 | Canciones (audio) | 13 643 | las primeras 10 000 filas |
 | Con letra (texto) | 10 031 | las que tienen `has_lyrics` |
-| Portadas distintas (imagen) | 10 732 | 10 000 de ellas |
+| Portadas distintas (imagen) | 20 005 | las filas de `covers.csv` sin `duplicada_de` |
+
+### covers.csv
+
+`album_id, artist_id, album, record_type, release_date, path, md5, origen, duplicada_de`:
+una fila por portada. `origen` es `cancion` (la del álbum de una canción de `songs.csv`) o
+`extra` (de `fetch_covers.py`). `duplicada_de` tiene el `album_id` de otra portada con el mismo
+archivo (199 de las canciones, el mismo arte con otro id de álbum); esas no se usan en SIFT.
 
 ## Contenido
 
