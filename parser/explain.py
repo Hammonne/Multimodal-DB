@@ -151,6 +151,29 @@ def _nodo_scan(entrada, stats, filtro):
             nodo.detalles.append(f"Filter: ({filtro})")
         return nodo
 
+    elif tipo in ("VECTOR INDEX SCAN", "VECTOR SEQ SCAN"):
+        columna = entrada.get("column", "")
+        k = int(entrada.get("k", 1))
+        if tipo == "VECTOR INDEX SCAN":
+            indice = entrada.get("index", "hnsw")
+            etiqueta = f"Index Scan using {indice}_{tabla}_{columna} on {tabla}"
+            # hnsw e ivf solo miran una parte de la tabla
+            revisados = int(entrada.get("candidates", 0)) or max(k, filas_tabla // 10)
+            costo_inicial = 0.29
+            costo_total = costo_inicial + revisados * CPU_OPERATOR_COST + k * RANDOM_PAGE_COST
+        else:
+            etiqueta = f"Seq Scan on {tabla}"
+            costo_inicial = paginas * SEQ_PAGE_COST + filas_tabla * CPU_OPERATOR_COST
+            costo_total = costo_inicial + filas_tabla * CPU_TUPLE_COST
+        nodo = NodoPlan(etiqueta, costo_inicial, costo_total, k, ancho, medicion=entrada)
+        nodo.detalles.append(f"Order By: k-NN por similitud (k={k}, metrica={entrada.get('metric', 'coseno')})")
+        if entrada.get("candidates"):
+            nodo.detalles.append(f"Vectores revisados: {entrada['candidates']}")
+        if filtro:
+            clave = "Index Cond" if tipo == "VECTOR INDEX SCAN" else "Filter"
+            nodo.detalles.append(f"{clave}: ({filtro})")
+        return nodo
+
     elif tipo == "RTREE INDEX SCAN":
         columna = entrada.get("column", "")
         etiqueta = f"Index Scan using rtree_{tabla}_{columna} on {tabla}"
@@ -202,7 +225,8 @@ def construir(entradas, stats, filtro=None, limite=None, total_ms=0.0):
     paginas, filas_tabla, ancho = stats
 
     scan = _buscar(entradas, "SEQUENTIAL SCAN", "INDEX SCAN", "BITMAP INDEX SCAN",
-                   "RTREE INDEX SCAN", "RTREE KNN")
+                   "RTREE INDEX SCAN", "RTREE KNN", "VECTOR INDEX SCAN",
+                   "VECTOR SEQ SCAN")
     if scan is not None:
         raiz = _nodo_scan(scan, stats, filtro)
     else:

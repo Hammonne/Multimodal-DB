@@ -29,7 +29,8 @@ from ast_sql import (AggFun, AndCond, BetweenCond, BoolValue, ColRef, Cond,
                      CompareCond, DataType, DistanceExpr, FileOrg,
                      FloatValue, IndexKind, IntValue, Metrica, OrCond,
                      PointValue, PolygonValue, WithinExpr,
-                     RelOp, SortDir, StrValue)
+                     RelOp, SortDir, StrValue,
+                     SimilarityScoreExpr, SimilarToExpr, VectorIndex)
 from ast_sql import SelectStmt
 from visitor import Visitor
 import explain as explain_fmt
@@ -49,6 +50,9 @@ from indexes.external_hash import ExternalHasher
 from indexes.extendible_hash import HashIndex
 from indexes.bitmap_index import BitmapIndex
 from storage.index_manager import RTreeSecondaryIndex
+from storage.vector_index import (VectorSecondaryIndex, Vectorizador, limpiar,
+                                  ruta_archivo, score as score_similitud)
+from multimedia.features import tipo_de
 from storage.formats.serializers.variable_length_serializer import VariableLengthRecordSerializer
 from storage.lock_manager import LockMode
 from storage.rid import RID
@@ -237,6 +241,10 @@ class ExecuteVisitor(Visitor):
 
     def _visit_select_locked(self, stm):
         tabla = self._abrir(stm.tabla)
+        similar = self._similar_de(stm.condicion)
+        if similar is not None:
+            self._select_similitud(tabla, stm, similar)
+            return
         derecha = None
         self.plan = [{"node": "SELECT", "table": stm.tabla, "operation": "project"}]
 
@@ -317,6 +325,168 @@ class ExecuteVisitor(Visitor):
         self.plan.append({"node": "OUTPUT", "operation": "return_rows", "rows": len(filas)})
         self.resultado = Resultado(columnas=nombres, filas=filas, plan=self.plan)
 
+    # ---------------- busqueda por similitud (parte 4) ----------------
+
+    @staticmethod
+    def _similar_de(condicion):
+        # el SIMILAR_TO del WHERE, solo o dentro de un AND (el parser ya prohibe el OR)
+        if isinstance(condicion, SimilarToExpr):
+            return condicion
+        if isinstance(condicion, AndCond):
+            for c in condicion.condiciones:
+                if isinstance(c, SimilarToExpr):
+                    return c
+        return None
+
+    def _vectorizador(self):
+        if not hasattr(self, "_vec"):
+            self._vec = Vectorizador()
+        return self._vec
+
+    def _plan_similitud(self, tabla, stm, similar):
+        # (posicion de la columna, indice o None) para la consulta
+        try:
+            tipo = tipo_de(similar.archivo)
+        except ValueError as e:
+            raise ExecutionError(str(e))
+        nombre_tipo = "imagenes" if tipo == "sift" else "audios"
+        pedido = stm.indice_vectorial
+
+        vectoriales = [(pos, idx) for pos, idxs in tabla.secondary_indexes.items()
+                       for idx in idxs
+                       if isinstance(idx, VectorSecondaryIndex) and idx.tipo == tipo]
+        if pedido != VectorIndex.NINGUNO:
+            for pos, idx in vectoriales:
+                if idx.tipo_indice == pedido.name.lower():
+                    return pos, idx
+            raise ExecutionError(
+                f"'{tabla.name}' no tiene un indice {pedido.name} sobre una columna de "
+                f"{nombre_tipo}; crealo con CREATE INDEX ON {tabla.name} (columna) "
+                f"USING {pedido.name}"
+            )
+        if vectoriales:
+            return vectoriales[0][0], None
+
+        # sin indice: la primera columna varchar cuyos archivos son del mismo tipo
+        for _, registro in tabla.scan():
+            for pos, t in enumerate(tabla.schema):
+                if not t.strip().lower().startswith("varchar"):
+                    continue
+                try:
+                    if tipo_de(limpiar(registro[pos])) == tipo:
+                        return pos, None
+                except ValueError:
+                    continue
+            break
+        raise ExecutionError(f"'{tabla.name}' no tiene una columna con rutas de {nombre_tipo}")
+
+    def _vector_consulta(self, similar):
+        try:
+            return self._vectorizador().vector(ruta_archivo(similar.archivo))
+        except FileNotFoundError:
+            raise ExecutionError(f"no existe el archivo de consulta '{similar.archivo}'")
+        except ValueError as e:
+            raise ExecutionError(str(e))
+
+    def _candidatos_similares(self, tabla, stm, similar, pos, indice, q, resolver):
+        # [(registro, score)] de los k mas parecidos que cumplen el resto del WHERE
+        k, metrica = similar.k, stm.metrica_vectorial
+        filtro = stm.condicion if stm.condicion is not similar else None
+
+        if indice is not None:
+            entrada = {"node": "VECTOR INDEX SCAN", "table": tabla.name,
+                       "operation": "vector_index_scan", "index": indice.tipo_indice,
+                       "column": tabla.column_names[pos], "k": k, "metric": metrica}
+            self.plan.append(entrada)
+            salida, vistos, pedidos = [], set(), k
+            with self._medir(entrada) as medida:
+                while len(salida) < k:
+                    vecinos = indice.knn(q, pedidos)
+                    for rid, v in vecinos:
+                        if rid in vistos:
+                            continue
+                        vistos.add(rid)
+                        registro = tabla.get(rid)
+                        if registro is None:
+                            continue
+                        if filtro is None or self._evaluar(filtro, registro, resolver):
+                            medida.emitida()
+                            salida.append((registro, score_similitud(metrica, q, v)))
+                            if len(salida) == k:
+                                break
+                        else:
+                            medida.descartada()
+                    if len(vecinos) < pedidos:
+                        break
+                    pedidos *= 2
+            entrada["candidates"] = indice.candidatos
+            return salida
+
+        entrada = {"node": "VECTOR SEQ SCAN", "table": tabla.name,
+                   "operation": "vector_scan", "column": tabla.column_names[pos],
+                   "k": k, "metric": metrica}
+        self.plan.append(entrada)
+        vec = self._vectorizador()
+        todos = []
+        with self._medir(entrada) as medida:
+            for _, registro in tabla.scan():
+                if filtro is not None and not self._evaluar(filtro, registro, resolver):
+                    medida.descartada()
+                    continue
+                if not limpiar(registro[pos]):
+                    continue
+                try:
+                    v = vec.vector(ruta_archivo(registro[pos], vec.data))
+                except (FileNotFoundError, ValueError):
+                    continue
+                medida.emitida()
+                todos.append((registro, score_similitud(metrica, q, v)))
+        entrada["candidates"] = len(todos)
+        todos.sort(key=lambda par: -par[1])
+        return todos[:k]
+
+    def _select_similitud(self, tabla, stm, similar):
+        if stm.join is not None:
+            raise ExecutionError("SIMILAR_TO no se puede combinar con JOIN")
+        if self._tiene_agregados(stm):
+            raise ExecutionError("SIMILAR_TO no se puede combinar con agregaciones")
+
+        self.plan = [{"node": "SELECT", "table": stm.tabla, "operation": "project"}]
+        resolver = self._resolver_columnas([(stm.tabla, tabla)])
+        t_plan = time.perf_counter()
+        pos, indice = self._plan_similitud(tabla, stm, similar)
+        self._planning_ms += (time.perf_counter() - t_plan) * 1000.0
+        q = self._vector_consulta(similar)
+        pares = self._candidatos_similares(tabla, stm, similar, pos, indice, q, resolver)
+
+        # ORDER BY: el score (o su alias) o cualquier otra columna; sin ORDER BY el mas parecido primero
+        if stm.order_by is not None:
+            reverse = stm.direccion == SortDir.DESC_DIR
+            alias_score = {i.alias for i in stm.proyeccion
+                           if isinstance(i.columna, SimilarityScoreExpr) and i.alias}
+            if (isinstance(stm.order_by, SimilarityScoreExpr)
+                    or (isinstance(stm.order_by, ColRef) and not stm.order_by.tabla
+                        and stm.order_by.columna in alias_score)):
+                pares.sort(key=lambda par: par[1], reverse=reverse)
+            else:
+                p = resolver(stm.order_by)
+                pares.sort(key=lambda par: par[0][p], reverse=reverse)
+        if stm.haylimite:
+            pares = pares[:stm.limite]
+
+        if stm.select_all:
+            nombres = list(tabla.column_names)
+            filas = [list(registro) for registro, _ in pares]
+        else:
+            nombres = [self._nombre_item(i) for i in stm.proyeccion]
+            posiciones = [None if isinstance(i.columna, SimilarityScoreExpr) else resolver(i.columna)
+                          for i in stm.proyeccion]
+            filas = [[round(sc, 6) if p is None else registro[p] for p in posiciones]
+                     for registro, sc in pares]
+
+        self.plan.append({"node": "OUTPUT", "operation": "return_rows", "rows": len(filas)})
+        self.resultado = Resultado(columnas=nombres, filas=filas, plan=self.plan)
+
     def visit_delete_stmt(self, stm):
         with self._table_locks([stm.tabla], LockMode.EXCLUSIVE):
             tabla = self._abrir(stm.tabla)
@@ -392,6 +562,18 @@ class ExecuteVisitor(Visitor):
                     f"un indice RTREE exige una columna POINT; "
                     f"'{stm.columna}' es de tipo '{tabla.schema[pos]}'"
                 )
+        elif stm.tipo in (IndexKind.IVF_IDX, IndexKind.HNSW_IDX):
+            # apunta a filas por RID como el R-Tree, y el secuencial mueve los RID al reorganizar
+            if tabla.file_type != "heap":
+                raise ExecutionError(
+                    f"un indice {stm.tipo.name[:-4]} exige una tabla USING HEAP"
+                )
+            if not tabla.schema[pos].strip().lower().startswith("varchar"):
+                raise ExecutionError(
+                    f"un indice {stm.tipo.name[:-4]} va sobre una columna VARCHAR con "
+                    f"la ruta de la imagen o el audio; '{stm.columna}' es de tipo "
+                    f"'{tabla.schema[pos]}'"
+                )
         elif stm.clustered:
             if tabla.file_type != "sequential":
                 raise ExecutionError(
@@ -413,6 +595,8 @@ class ExecuteVisitor(Visitor):
         nombre = f"idx_{stm.tabla}_{stm.columna}"
         if stm.tipo == IndexKind.RTREE_IDX:
             nombre = f"{nombre}_rtree"
+        elif stm.tipo in (IndexKind.IVF_IDX, IndexKind.HNSW_IDX):
+            nombre = f"{nombre}_{stm.tipo.name[:-4].lower()}"
         elif stm.tipo == IndexKind.BITMAP_IDX:
             nombre = f"{nombre}_bitmap"
         elif stm.tipo == IndexKind.HASH_IDX:
@@ -454,6 +638,15 @@ class ExecuteVisitor(Visitor):
             )
             tipo_nombre = "R-Tree"
             org = "espacial"
+        elif stm.tipo in (IndexKind.IVF_IDX, IndexKind.HNSW_IDX):
+            tipo_nombre = stm.tipo.name[:-4]
+            try:
+                indice = self.sm.index_manager.create_vector_index(
+                    nombre, tabla, pos, stm.columna, tipo_nombre.lower()
+                )
+            except (ValueError, FileNotFoundError) as e:
+                raise ExecutionError(str(e))
+            org = f"vectorial, {len(indice)} vectores {indice.tipo or ''}".strip()
         elif stm.clustered:
             self.sm.index_manager.create_clustered_index(
                 nombre, tabla, stm.columna
@@ -564,6 +757,19 @@ class ExecuteVisitor(Visitor):
 
         self.plan.append({"node": "SELECT", "table": nombre, "operation": "project"})
 
+        similar = self._similar_de(condicion)
+        if similar is not None:
+            pos, indice = self._plan_similitud(tabla, interna, similar)
+            entrada = {"table": nombre, "column": tabla.column_names[pos],
+                       "k": similar.k, "metric": interna.metrica_vectorial}
+            if indice is not None:
+                entrada.update(node="VECTOR INDEX SCAN", operation="vector_index_scan",
+                               index=indice.tipo_indice)
+            else:
+                entrada.update(node="VECTOR SEQ SCAN", operation="vector_scan")
+            self.plan.append(entrada)
+            return
+
         _t_plan = time.perf_counter()
         plan_bitmap = self._plan_bitmap(tabla, condicion, resolver)
         self._planning_ms += (time.perf_counter() - _t_plan) * 1000.0
@@ -618,6 +824,8 @@ class ExecuteVisitor(Visitor):
         return self._texto_condicion(condicion)
 
     def _texto_condicion(self, cond) -> str:
+        if isinstance(cond, SimilarToExpr):
+            return cond.etiqueta()
         if isinstance(cond, WithinExpr):
             return cond.etiqueta()
         if isinstance(cond, OrCond):
@@ -886,6 +1094,10 @@ class ExecuteVisitor(Visitor):
     def _nombre_item(self, item) -> str:
         """Nombre de columna de un elemento de la proyeccion (funciones
         de agregacion incluidas: count(*), sum(monto), ...)."""
+        if getattr(item, "alias", ""):
+            return item.alias
+        if isinstance(item.columna, SimilarityScoreExpr):
+            return "similarity_score"
         if item.agg == AggFun.NONE_AGG:
             return item.columna.columna
         if item.agg == AggFun.COUNT_AGG:
@@ -1395,7 +1607,8 @@ class ExecuteVisitor(Visitor):
         if tabla.clustered_index is not None and pos == tabla.key_index:
             return ("clustered", tabla.clustered_index)
         secundarios = [idx for idx in tabla.secondary_indexes.get(pos, [])
-                       if not isinstance(idx, (BitmapIndex, RTreeSecondaryIndex))]
+                       if not isinstance(idx, (BitmapIndex, RTreeSecondaryIndex,
+                                               VectorSecondaryIndex))]
         for idx in secundarios:
             if not isinstance(idx, HashIndex):
                 return ("unclustered", idx)
@@ -1779,6 +1992,10 @@ class ExecuteVisitor(Visitor):
         if isinstance(cond, WithinExpr):
             return self._dentro_de(cond, registro, resolver)
 
+        # las k filas ya salieron del indice vectorial, aqui solo se revisa lo demas del AND
+        if isinstance(cond, SimilarToExpr):
+            return True
+
         if isinstance(cond, CompareCond):
             izq = self._operando(cond.columna, registro, resolver)
             der = self._valor(cond.valor)
@@ -1819,7 +2036,7 @@ class ExecuteVisitor(Visitor):
             return ("clustered", tabla.clustered_index, pos)
 
         for indice in tabla.secondary_indexes.get(pos, []):
-            if not isinstance(indice, (HashIndex, BitmapIndex)):
+            if not isinstance(indice, (HashIndex, BitmapIndex, VectorSecondaryIndex)):
                 return ("unclustered", indice, pos)
         return None
 

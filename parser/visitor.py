@@ -1,4 +1,5 @@
-from ast_sql import (AggFun, Cond, DataType, FileOrg, IndexKind, SortDir)
+from ast_sql import (AggFun, Cond, DataType, FileOrg, IndexKind, SortDir,
+                     VectorIndex)
 
 # Nombre SQL de cada tipo de indice
 NOMBRE_INDICE = {
@@ -6,6 +7,8 @@ NOMBRE_INDICE = {
     IndexKind.HASH_IDX: "HASH",
     IndexKind.BITMAP_IDX: "BITMAP",
     IndexKind.RTREE_IDX: "RTREE",
+    IndexKind.IVF_IDX: "IVF",
+    IndexKind.HNSW_IDX: "HNSW",
 }
 
 
@@ -35,6 +38,12 @@ class Visitor:
         raise NotImplementedError
 
     def visit_within_expr(self, e):
+        raise NotImplementedError
+
+    def visit_similar_to_expr(self, e):
+        raise NotImplementedError
+
+    def visit_similarity_score_expr(self, e):
         raise NotImplementedError
 
     def visit_col_ref(self, c):
@@ -124,6 +133,12 @@ class PrintVisitor(Visitor):
         e.poligono.accept(self)
         print(")", end="")
 
+    def visit_similar_to_expr(self, e):
+        print(f"SIMILAR_TO('{e.archivo}', k={e.k})", end="")
+
+    def visit_similarity_score_expr(self, e):
+        print("SIMILARITY_SCORE()", end="")
+
     def visit_distance_expr(self, e):
         print(f"{e.nombre_funcion()}(", end="")
         e.izquierda.accept(self)
@@ -177,6 +192,11 @@ class PrintVisitor(Visitor):
     # -----------------------------
 
     def visit_select_item(self, item):
+        self.imprimir_item(item)
+        if item.alias:
+            print(" AS " + item.alias, end="")
+
+    def imprimir_item(self, item):
         if item.agg == AggFun.NONE_AGG:
             if item.estrella:
                 print("*", end="")
@@ -263,6 +283,9 @@ class PrintVisitor(Visitor):
         if stm.condicion is not None:
             print(" WHERE ", end="")
             stm.condicion.accept(self)
+        if stm.indice_vectorial != VectorIndex.NINGUNO:
+            print(f" USING {stm.indice_vectorial.name} WITH METRIC={stm.metrica_vectorial}",
+                  end="")
         if stm.group_by is not None:
             print(" GROUP BY ", end="")
             stm.group_by.accept(self)

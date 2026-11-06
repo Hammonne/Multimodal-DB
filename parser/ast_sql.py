@@ -13,6 +13,8 @@ class IndexKind(Enum):
     HASH_IDX = auto()
     BITMAP_IDX = auto()
     RTREE_IDX = auto()
+    IVF_IDX = auto()      # vectoriales (2.4.2), sobre una columna con rutas de archivos
+    HNSW_IDX = auto()
 
 
 # Tipos de dato del catalogo
@@ -213,6 +215,55 @@ class WithinExpr:
 
 
 # -----------------------------
+# Busqueda por similitud (2.4.3)
+#
+#   WHERE SIMILAR_TO('consulta.jpg', k=10) USING HNSW WITH METRIC=cosine
+#
+# SIMILAR_TO es un predicado completo, como dentro_de: elige las k filas
+# mas parecidas al archivo. El indice y la metrica no van dentro de la
+# funcion sino en el USING ... WITH METRIC del SELECT, asi que se guardan
+# en el SelectStmt (ver indice_vectorial y metrica_vectorial)
+# -----------------------------
+
+# Indices vectoriales; NINGUNO es la busqueda lineal exacta
+class VectorIndex(Enum):
+    NINGUNO = auto()
+    IVF = auto()
+    HNSW = auto()
+
+
+# Nombres que acepta WITH METRIC=, con el nombre que usa indexes/metricas.py
+METRICAS_VECTORIALES = {
+    "euclidean": "euclidiana", "euclidiana": "euclidiana", "l2": "euclidiana",
+    "cosine": "coseno", "coseno": "coseno", "cos": "coseno",
+    "dot": "producto_punto", "producto_punto": "producto_punto",
+    "inner_product": "producto_punto", "ip": "producto_punto",
+}
+
+
+class SimilarToExpr:
+    def __init__(self, archivo, k):
+        self.archivo = archivo      # ruta de la imagen o el audio de consulta
+        self.k = k
+
+    def etiqueta(self) -> str:
+        return f"similar_to('{self.archivo}', k={self.k})"
+
+    def accept(self, visitor):
+        return visitor.visit_similar_to_expr(self)
+
+
+# SIMILARITY_SCORE(): que tan parecida es cada fila a la consulta.
+# Mayor = mas parecida, para que ORDER BY score DESC sirva con cualquier metrica
+class SimilarityScoreExpr:
+    def etiqueta(self) -> str:
+        return "similarity_score()"
+
+    def accept(self, visitor):
+        return visitor.visit_similarity_score_expr(self)
+
+
+# -----------------------------
 # Condiciones del WHERE
 #
 # La jerarquia OrCond -> AndCond -> predicado codifica la precedencia:
@@ -292,7 +343,8 @@ class SelectItem:
     def __init__(self):
         self.agg = AggFun.NONE_AGG
         self.estrella = False   # '*' suelto, o el '*' de COUNT(*)
-        self.columna = None
+        self.columna = None     # ColRef, o SimilarityScoreExpr
+        self.alias = ""         # el nombre de AS, vacio si no hay
 
     def accept(self, visitor):
         return visitor.visit_select_item(self)
@@ -370,6 +422,8 @@ class SelectStmt(Stmt):
         self.direccion = SortDir.ASC_DIR
         self.limite = 0
         self.haylimite = False
+        self.indice_vectorial = VectorIndex.NINGUNO   # USING IVF | HNSW
+        self.metrica_vectorial = "coseno"             # WITH METRIC=
 
     def accept(self, visitor):
         return visitor.visit_select_stmt(self)

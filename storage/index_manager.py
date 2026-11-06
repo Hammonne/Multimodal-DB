@@ -11,6 +11,7 @@ from storage.buffer_manager import BufferManager
 from storage.file_manager import FileManager
 from storage.schema_catalog import SchemaCatalog
 from storage.table import Table
+from storage.vector_index import VectorSecondaryIndex
 
 
 HASH_FILE_HEADER_SIZE = 16
@@ -305,6 +306,42 @@ class IndexManager:
         table.attach_index(column_index, index)
         return index
 
+    def create_vector_index(
+        self,
+        index_name: str,
+        table: Table,
+        column_index: int,
+        column_name: str,
+        index_type: str
+    ) -> VectorSecondaryIndex:
+        # ivf o hnsw sobre una columna varchar con rutas de imágenes o audios (parte 4)
+        if not table.schema[column_index].strip().lower().startswith("varchar"):
+            raise ValueError(
+                f"Un índice {index_type.upper()} va sobre una columna VARCHAR con la ruta "
+                f"del archivo; '{column_name}' es de tipo '{table.schema[column_index]}'"
+            )
+        index = VectorSecondaryIndex(f"{index_name}.npz", index_type)
+        index.construir(table, column_index)
+        self.catalog.register_index(
+            index_name=index_name,
+            table_name=table.name,
+            column_name=column_name,
+            column_index=column_index,
+            index_type=index_type
+        )
+        self.open_indexes[index_name] = index
+        table.attach_index(column_index, index)
+        return index
+
+    def _load_vector_index(self, index_name, table, column_index, index_type):
+        # se reabre de disco; si la tabla cambió con el índice cerrado se reconstruye
+        index = VectorSecondaryIndex(f"{index_name}.npz", index_type)
+        n_filas = sum(1 for _ in table.scan())
+        if not index.cargar(n_filas):
+            index.construir(table, column_index)
+        self.open_indexes[index_name] = index
+        table.attach_index(column_index, index)
+
     def load_indexes_for_table(self, table: Table):
         """
         Carga los índices registrados en el catálogo para una tabla dada
@@ -352,6 +389,9 @@ class IndexManager:
                         index_name, table, col_idx, meta["column_name"]
                     )
 
+                elif idx_type in ("ivf", "hnsw"):
+                    self._load_vector_index(index_name, table, col_idx, idx_type)
+
                 elif idx_type == "bitmap":
                     # El bitmap sí persiste sus páginas: se reabre el archivo
                     # y el directorio clave -> (pagina, slot) se rearma solo.
@@ -364,8 +404,11 @@ class IndexManager:
     def drop_index(self, index_name: str):
         """Elimina un índice y su archivo físico .idx."""
         if index_name in self.open_indexes:
-            self.open_indexes[index_name].close()
-            del self.open_indexes[index_name]
+            index = self.open_indexes.pop(index_name)
+            if isinstance(index, VectorSecondaryIndex):
+                index.eliminar_archivos()
+            else:
+                index.close()
 
         self.catalog.drop_index_info(index_name)
 

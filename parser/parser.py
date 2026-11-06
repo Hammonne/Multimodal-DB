@@ -7,7 +7,9 @@ from ast_sql import (AggFun, AndCond, BetweenCond, BoolValue, ColRef,
                      JoinClause, Metrica, OrCond, PointValue, PolygonValue,
                      Programa, RelOp, WithinExpr,
                      SelectItem, SelectStmt, SortDir, StrValue,
-                     TransactionStmt, UpdateStmt)
+                     TransactionStmt, UpdateStmt,
+                     METRICAS_VECTORIALES, SimilarityScoreExpr,
+                     SimilarToExpr, VectorIndex)
 
 
 # En C++ esto era un runtime_error con la posicion pegada al mensaje.
@@ -196,6 +198,7 @@ class Parser:
         return cd
 
     # CreateIndex ::= CREATE INDEX ON id ( id ) USING IndexKind [CLUSTERED]
+    # IndexKind ::= BTREE | HASH | BITMAP | RTREE | IVF | HNSW
     def parse_create_index(self):
         self.match(Token.Type.INDEX)
         ci = CreateIndexStmt()
@@ -224,8 +227,12 @@ class Parser:
             ci.tipo = IndexKind.BITMAP_IDX
         elif self.match(Token.Type.RTREE):
             ci.tipo = IndexKind.RTREE_IDX
+        elif self.match(Token.Type.IVF):
+            ci.tipo = IndexKind.IVF_IDX
+        elif self.match(Token.Type.HNSW):
+            ci.tipo = IndexKind.HNSW_IDX
         else:
-            self.error("se esperaba BTREE, HASH o BITMAP")
+            self.error("se esperaba BTREE, HASH, BITMAP, RTREE, IVF o HNSW")
 
         if self.match(Token.Type.CLUSTERED):
             ci.clustered = True
@@ -238,6 +245,8 @@ class Parser:
         # por el obligaria a copiar cada fila al heap, que ya es donde vive
         if ci.clustered and ci.tipo == IndexKind.BITMAP_IDX:
             self.error_semantico("un indice BITMAP no puede ser CLUSTERED")
+        if ci.clustered and ci.tipo in (IndexKind.IVF_IDX, IndexKind.HNSW_IDX):
+            self.error_semantico("un indice IVF o HNSW no puede ser CLUSTERED")
         return ci
 
     # DropTable ::= DROP TABLE id
@@ -262,7 +271,8 @@ class Parser:
         sentencia = self.parse_stmt()
         return ExplainStmt(sentencia, analyze)
 
-    # Select ::= SELECT SelList FROM id [Join] [Where] [GroupBy] [OrderBy] [Limit]
+    # Select ::= SELECT SelList FROM id [Join] [Where [UsingVec]] [GroupBy]
+    #            [OrderBy] [Limit]
     def parse_select(self):
         self.match(Token.Type.SELECT)
         s = SelectStmt()
@@ -286,6 +296,8 @@ class Parser:
 
         if self.match(Token.Type.WHERE):
             s.condicion = self.parse_cond()
+            if self.check(Token.Type.USING):
+                self.parse_using_vectorial(s)
 
         if self.match(Token.Type.GROUP):
             if not self.match(Token.Type.BY):
@@ -306,11 +318,79 @@ class Parser:
                 self.error("se esperaba el limite de filas")
             s.limite = int(self.previous.text)
             s.haylimite = True
+
+        self.validar_similitud(s)
         return s
 
-    # Proj ::= ColRef | AggFun ( ColRef | * )
+    # UsingVec ::= USING (IVF | HNSW) [WITH METRIC = id]
+    # sin WITH METRIC se usa coseno
+    def parse_using_vectorial(self, s):
+        self.match(Token.Type.USING)
+        if self.match(Token.Type.IVF):
+            s.indice_vectorial = VectorIndex.IVF
+        elif self.match(Token.Type.HNSW):
+            s.indice_vectorial = VectorIndex.HNSW
+        else:
+            self.error("se esperaba IVF o HNSW despues de USING")
+
+        if self.match(Token.Type.WITH):
+            if not self.match(Token.Type.METRIC):
+                self.error("se esperaba METRIC despues de WITH")
+            if not self.match(Token.Type.EQ):
+                self.error("se esperaba = despues de METRIC")
+            if not (self.match(Token.Type.ID) or self.match(Token.Type.STR)):
+                self.error("se esperaba el nombre de la metrica")
+            nombre = self.previous.text.lower()
+            if nombre not in METRICAS_VECTORIALES:
+                self.error_semantico(f"metrica desconocida '{self.previous.text}', "
+                                     "se esperaba euclidean, cosine o dot")
+            s.metrica_vectorial = METRICAS_VECTORIALES[nombre]
+
+    # reglas que no se ven en la gramatica: un solo SIMILAR_TO, no dentro de un OR,
+    # y USING IVF/HNSW o SIMILARITY_SCORE() solo si hay SIMILAR_TO
+    def validar_similitud(self, s):
+        similares, en_or = [], []
+        self._buscar_similar(s.condicion, False, similares, en_or)
+        if len(similares) > 1:
+            self.error_semantico("solo se permite un SIMILAR_TO por consulta")
+        if en_or:
+            self.error_semantico("SIMILAR_TO no puede ir dentro de un OR")
+
+        usa_score = (isinstance(s.order_by, SimilarityScoreExpr)
+                     or any(isinstance(i.columna, SimilarityScoreExpr)
+                            for i in s.proyeccion))
+        if not similares:
+            if s.indice_vectorial != VectorIndex.NINGUNO:
+                self.error_semantico("USING IVF/HNSW solo se usa con SIMILAR_TO")
+            if usa_score:
+                self.error_semantico("SIMILARITY_SCORE() solo se usa con SIMILAR_TO")
+
+    def _buscar_similar(self, cond, dentro_de_or, similares, en_or):
+        if isinstance(cond, SimilarToExpr):
+            similares.append(cond)
+            if dentro_de_or:
+                en_or.append(cond)
+        elif isinstance(cond, (AndCond, OrCond)):
+            for c in cond.condiciones:
+                self._buscar_similar(c, dentro_de_or or isinstance(cond, OrCond),
+                                     similares, en_or)
+
+    # Item ::= Proj [AS id]
     def parse_select_item(self):
+        item = self.parse_proj()
+        if self.match(Token.Type.AS):
+            if not self.match(Token.Type.ID):
+                self.error("se esperaba un nombre despues de AS")
+            item.alias = self.previous.text
+        return item
+
+    # Proj ::= ColRef | AggFun ( ColRef | * ) | SIMILARITY_SCORE ( )
+    def parse_proj(self):
         item = SelectItem()
+
+        if self.check(Token.Type.SIMILARITY_SCORE):
+            item.columna = self.parse_similarity_score()
+            return item
 
         if self.match(Token.Type.COUNT):
             item.agg = AggFun.COUNT_AGG
@@ -463,6 +543,7 @@ class Parser:
         return a
 
     # Pred ::= Operando RelOp Value | ColRef BETWEEN Value AND Value | ( Cond )
+    #        | DentroDe | SimilarTo
     # Operando ::= ColRef | Distancia
     def parse_pred(self):
         if self.match(Token.Type.LPAREN):
@@ -470,6 +551,9 @@ class Parser:
             if not self.match(Token.Type.RPAREN):
                 self.error("se esperaba )")
             return c
+
+        if self.check(Token.Type.SIMILAR_TO):
+            return self.parse_similar_to()
 
         # Predicado espacial de pertenencia: dentro_de(col, POLYGON(...))
         # No lleva operador: ya es verdadero o falso por si mismo.
@@ -606,10 +690,49 @@ class Parser:
         valor = float(self.previous.text)
         return -valor if negativo else valor
 
-    # OrderExpr ::= Distancia | ColRef
+    # SimilarTo ::= SIMILAR_TO ( str , [k =] num )
+    def parse_similar_to(self):
+        self.match(Token.Type.SIMILAR_TO)
+        if not self.match(Token.Type.LPAREN):
+            self.error("se esperaba ( despues de SIMILAR_TO")
+        if not self.match(Token.Type.STR):
+            self.error("SIMILAR_TO espera la ruta del archivo entre comillas")
+        archivo = self.previous.text
+        if not self.match(Token.Type.COMA):
+            self.error("se esperaba , y el k en SIMILAR_TO")
+
+        if self.check(Token.Type.ID):
+            if self.current.text.lower() != "k":
+                self.error("se esperaba k=<numero> en SIMILAR_TO")
+            self.advance()
+            if not self.match(Token.Type.EQ):
+                self.error("se esperaba = despues de k")
+        if not self.match(Token.Type.NUM):
+            self.error("se esperaba el numero de resultados k")
+        if "." in self.previous.text or int(self.previous.text) <= 0:
+            self.error_semantico("k debe ser un entero mayor que 0")
+        k = int(self.previous.text)
+
+        if not self.match(Token.Type.RPAREN):
+            self.error("se esperaba ) al cerrar SIMILAR_TO")
+        return SimilarToExpr(archivo, k)
+
+    # Score ::= SIMILARITY_SCORE ( )
+    def parse_similarity_score(self):
+        self.match(Token.Type.SIMILARITY_SCORE)
+        if not self.match(Token.Type.LPAREN):
+            self.error("se esperaba ( despues de SIMILARITY_SCORE")
+        if not self.match(Token.Type.RPAREN):
+            self.error("SIMILARITY_SCORE() no recibe argumentos")
+        return SimilarityScoreExpr()
+
+    # OrderExpr ::= Distancia | SIMILARITY_SCORE ( ) | ColRef
+    # un ColRef tambien puede ser el alias de un AS, eso lo resuelve el executor
     def parse_order_expr(self):
         if self._es_distancia():
             return self.parse_distancia()
+        if self.check(Token.Type.SIMILARITY_SCORE):
+            return self.parse_similarity_score()
         return self.parse_col_ref()
 
     # ColRef ::= id | id . id
