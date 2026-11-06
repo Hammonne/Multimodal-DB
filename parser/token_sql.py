@@ -73,6 +73,15 @@ class Token:
         DENTRO_DE = auto()
         RTREE = auto()
 
+        # Busqueda por similitud (2.4.3)
+        SIMILAR_TO = auto()
+        SIMILARITY_SCORE = auto()
+        IVF = auto()
+        HNSW = auto()
+        WITH = auto()
+        METRIC = auto()
+        AS = auto()
+
         # Plan de ejecucion
         EXPLAIN = auto()
         ANALYZE = auto()

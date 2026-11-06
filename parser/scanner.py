@@ -85,6 +85,15 @@ PALABRAS_RESERVADAS = {
     "DENTRO_DE": Token.Type.DENTRO_DE,
     "RTREE": Token.Type.RTREE,
 
+    # Busqueda por similitud (2.4.3)
+    "SIMILAR_TO": Token.Type.SIMILAR_TO,
+    "SIMILARITY_SCORE": Token.Type.SIMILARITY_SCORE,
+    "IVF": Token.Type.IVF,
+    "HNSW": Token.Type.HNSW,
+    "WITH": Token.Type.WITH,
+    "METRIC": Token.Type.METRIC,
+    "AS": Token.Type.AS,
+
     # Plan de ejecucion
     "EXPLAIN": Token.Type.EXPLAIN,
     "ANALYZE": Token.Type.ANALYZE,
