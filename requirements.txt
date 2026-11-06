@@ -5,3 +5,5 @@ face_recognition
 librosa>=0.10
 faiss-cpu
 hnswlib
+scikit-learn
+matplotlib
