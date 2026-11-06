@@ -51,6 +51,13 @@ comparó la última búsqueda (con lineal serían todos).
 
 ## IVF (`ivf.py`)
 
+*Inverted File Index*. La idea es no comparar la consulta con todo: K-Means parte el espacio en celdas
+(como un mapa de regiones) y cada vector se guarda en la lista de su celda. Al buscar solo se abren las
+celdas más cercanas a la consulta. En la imagen, con nprobe = 1 se revisan 24 de 500 vectores y con
+nprobe = 3 se revisan 81
+
+![IVF: celdas y nprobe](../docs/img/parte4/ivf_nprobe.png)
+
 ```
 entrenar:  K-Means sobre los vectores ─► nlist centroides (celdas)
 agregar:   cada vector va a la lista de su centroide más cercano
@@ -82,7 +89,9 @@ Con 10k TF-IDF (nlist = 100, coseno, 200 consultas fuera de la base):
 
 ## HNSW (`hnsw.py`)
 
-Malkov y Yashunin (2018). Junta dos ideas:
+Malkov y Yashunin (2018). Es el índice vectorial más usado (pgvector, Faiss, Pinecone...). Cada vector
+es un nodo de un grafo conectado a sus vecinos más cercanos, y buscar es caminar por el grafo
+acercándose cada vez más a la consulta. Junta dos ideas:
 - **NSW**: un grafo donde cada vector está conectado a sus vecinos cercanos y a algunos lejanos, así
   se llega de cualquier nodo a cualquier otro en pocos saltos con una búsqueda voraz
 - **Skip list**: varios niveles, arriba pocos nodos con saltos largos y abajo todos
@@ -92,6 +101,11 @@ nivel 2:  A ──────────────────────�
 nivel 1:  A ─────── C ───────── E ── F
 nivel 0:  A ── B ── C ── D ── E ── F ── G ── H          todos los nodos
 ```
+
+![HNSW: la búsqueda baja por los niveles](../docs/img/parte4/hnsw_niveles.jpg)
+
+En la imagen: arriba hay pocos nodos y la búsqueda da saltos largos (línea roja), y en cada nivel de abajo
+hay más nodos y los pasos son más cortos, hasta llegar a la consulta en el nivel 0
 
 - **Nivel de cada nodo:** al azar, `l = ⌊−ln(U) · mL⌋` con `mL = 1 / ln M`. Así P(l ≥ L) = M^(−L):
   con 20 000 nodos y M = 16 quedan ~1 250 en el nivel 1, ~80 en el 2 y ~5 en el 3

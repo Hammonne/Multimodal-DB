@@ -1,7 +1,13 @@
 # Multimedia
 
 Parte 4 (§2.4.1): `ExtractFeatures(objeto)` convierte una imagen o un audio en un vector de dimensión K
-para buscar contenido parecido. Es la misma idea que en texto, pero las "palabras" se construyen
+para buscar contenido parecido. Es la misma idea que en texto, pero aquí no hay palabras: hay píxeles y
+muestras de audio. Entonces las palabras se fabrican. De cada imagen o audio se sacan muchos vectores
+chiquitos (descriptores locales), se agrupan todos los de la colección con K-Means y cada grupo pasa a ser
+una "palabra". Así cada objeto queda como un histograma de cuántas veces aparece cada palabra, igual que
+un documento. A esto se le llama *bag of visual words* (o *audio words*)
+
+![k-means: cada grupo de descriptores es una palabra](../docs/img/parte4/kmeans_palabras.png)
 
 ```
 archivo ─► descriptores locales ─► palabra más cercana ─► histograma tf ─► × idf ─► vector TF-IDF (K = 1024)
@@ -50,6 +56,29 @@ python -m multimedia.features --tipo ambos --k 1024       # 3. vectores TF-IDF d
 | No ve | color | melodía |
 
 ### SIFT
+
+*Scale-Invariant Feature Transform*. Busca puntos de la imagen que se pueden volver a encontrar aunque
+la imagen esté más chica, rotada o más oscura (esquinas, manchas, bordes) y describe la zona alrededor
+de cada uno con 128 números. Cada círculo es un punto clave: su tamaño es la escala y la raya su orientación
+
+![puntos SIFT en una portada](../docs/img/parte4/sift_puntos.jpg)
+
+**Cómo encuentra puntos a distintas escalas.** La imagen se desenfoca con gaussianas cada vez más anchas
+(σ, kσ, k²σ...), mientras más se desenfoca es como verla más de lejos. Cada vez que σ se duplica la imagen
+se reduce a la mitad (una octava) y así se arma una pirámide. Luego se restan imágenes vecinas:
+`D = L(kσ) − L(σ)`. Esa resta de gaussianas (DoG) da valores muy altos o muy bajos justo donde hay una
+mancha del tamaño de σ
+
+![restar dos gaussianas da un detector de manchas](../docs/img/parte4/dog_curvas.png)
+![DoG en una portada](../docs/img/parte4/dog_portada.png)
+
+**El descriptor.** Alrededor del punto (ya girado a su orientación) se toma una ventana de 16 × 16, se parte
+en 4 × 4 celdas y en cada una se hace un histograma de 8 direcciones del gradiente (hacia dónde cambia el
+brillo): 4 × 4 × 8 = 128
+
+![descriptor 4 x 4 x 8](../docs/img/parte4/sift_descriptor.png)
+
+Detalles:
 - Detector: busca extremos en la pirámide de diferencias de gaussianas (DoG), cada punto es más
   alto o más bajo que sus 26 vecinos (8 en su escala, 9 arriba, 9 abajo). Eso da la posición y el tamaño
 - Se descartan los de poco contraste y se calcula la orientación dominante (histograma de 36 ángulos
@@ -63,9 +92,32 @@ python -m multimedia.features --tipo ambos --k 1024       # 3. vectores TF-IDF d
 - Portadas: las de `data/covers.csv` sin `duplicada_de`. Con `--source all` también artistas e
   integrantes (solo las fotos que aceptó el filtro de caras, para la Parte 5)
 - 15 de las 20 005 portadas no tienen ningún punto clave: son de un color plano o texto y fondo de
-  colores distintos pero mismo brillo (en gris quedan lisas). Su vector queda en cero
+  colores distintos pero mismo brillo (en gris quedan lisas). Su vector queda en cero. Para esas sirve
+  más el histograma de color (abajo, en Extras)
+
+![portadas sin puntos clave](../docs/img/parte4/sin_puntos.png)
+![a color y en gris](../docs/img/parte4/sin_puntos_gris.png)
 
 ### MFCC
+
+*Mel-Frequency Cepstral Coefficients*, es como SIFT pero para audio. En vez de puntos clave, la canción
+se parte en ventanas muy cortas (en 93 ms el sonido casi no cambia) y cada ventana se describe con pocos
+números que resumen el timbre, o sea cómo suena: voz, bajo, platillos. Se propuso en 1980 para
+reconocimiento de voz y es el descriptor clásico de audio
+
+![ventanas que se solapan](../docs/img/parte4/mfcc_ventanas.png)
+
+Paso a paso: la onda → espectrograma (FFT por ventana) → espectrograma mel (40 bandas, como escucha el
+oído: `mel(f) = 2595 · log10(1 + f / 700)`) → log → DCT, que deja los primeros coeficientes con la forma
+general del espectro
+
+![de la onda a los MFCC](../docs/img/parte4/mfcc_pasos.jpg)
+
+Al final cada canción es una matriz de 39 filas (13 MFCC + 13 Δ + 13 ΔΔ) por ~1 290 ventanas
+
+![matriz MFCC de una canción](../docs/img/parte4/mfcc_matriz.png)
+
+Detalles:
 - Audio mono a 22 050 Hz
 - Ventana de 2048 muestras (93 ms) con avance de 512 (23 ms, 75 % de solapamiento) y ventana de Hann
 - Por ventana: FFT, 40 bandas mel, log y DCT, se guardan los coeficientes 1 a 13
@@ -98,7 +150,16 @@ recall@10 = la original sale entre las 10 primeras (búsqueda exacta por coseno)
 | audio 5 s + ruido | .54 | .62 | .69 | .73 |
 | ms por consulta (sift / mfcc) | 1.1 / 0.8 | 2.0 / 1.6 | 3.8 / 3.4 | 8.1 / 5.9 |
 
-- La inercia baja casi en recta con K (en escala log), no hay un codo claro
+- La inercia baja casi en recta con K (en escala log), no hay un codo claro, así que el método del codo no
+  sirve para elegir. Davies-Bouldin también mejora siempre con K
+
+![inercia vs K](../docs/img/parte4/codebook_inercia.png)
+![Davies-Bouldin vs K](../docs/img/parte4/codebook_davies_bouldin.png)
+
+- Lo que decide es el recall de las consultas modificadas contra el tiempo:
+
+![recall@10 vs K](../docs/img/parte4/codebook_recall.png)
+
 - Más K = palabras más específicas y mejor recall, pero vectores más grandes, consultas más lentas y
   palabras casi vacías (con 1k, en 4096 un tercio de las palabras tiene menos de 5 descriptores)
 - 1024 es el punto medio: buen recall sin duplicar el tiempo por consulta. K también es la dimensión
@@ -129,6 +190,8 @@ comparación en [`benchmark/multimedia/README.md`](../benchmark/multimedia/READM
 
 ### Histograma de color (`color.py`)
 Descriptor global de las portadas, para lo que SIFT no ve. 12 tonos x 4 saturaciones + 2 grises (oscuro y claro) = 50 dimensiones, con raíz como RootSIFT
+
+![histograma de color de una portada](../docs/img/parte4/histograma_color.png)
 
 Casi no se mira el brillo: con 3 niveles de brillo por color una portada oscurecida al 60 % encontraba la original en el top 10 el 17 % de las veces, así el 91 %
 

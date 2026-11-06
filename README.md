@@ -1,87 +1,110 @@
-Como un spotify, un shazam y google lens pero todo a la vez shalom
+<h1 align="center">chutaDB</h1>
 
-chutaDB es un DBMS educativo en Python. Las Partes 1 y 2 (parser SQL, archivos, B+, hash, bitmap,
-R-Tree, transacciones) están explicadas en [`README-chuta.md`](README-chuta.md). Este README cubre
-el dataset, la instalación y la Parte 4 (búsqueda de imágenes y audio por similitud).
+<p align="center">
+  <b>Como un Spotify, un Shazam y Google Lens, pero todo a la vez shalom</b><br>
+  Una base de datos multimodal hecha desde cero en Python: tablas, mapas, letras de canciones,
+  portadas y audio, todo consultable con SQL.
+</p>
 
-## Instalación
+<p align="center">
+  <img src="docs/img/parte4/hero_busqueda.jpg" alt="búsqueda de portadas por similitud" width="900">
+</p>
+
+<p align="center"><i>
+  Le das una portada recortada y oscurecida y chutaDB encuentra la original entre 20 005 portadas en
+  ~2 ms, con un índice HNSW que implementamos nosotros.
+</i></p>
+
+---
+
+## Qué puede hacer
+
+| | Tipo de dato | Ejemplo | Por dentro |
+|---|---|---|---|
+| 🗂️ | **Relacional** | `SELECT artista, COUNT(*) FROM canciones GROUP BY artista` | heap y sequential file, B+, hash extensible, bitmap, joins y sort externos |
+| 🗺️ | **Espacial** | `SELECT * FROM tiendas ORDER BY distancia(ubicacion, POINT(-77.03, -12.04)) LIMIT 5` | R-Tree con k-NN, rango y polígonos |
+| 📝 | **Texto** | buscar canciones por lo que dice su letra (integrándose al SQL) | índice invertido SPIMI con TF-IDF y BM25 |
+| 🖼️ | **Imágenes** | `WHERE SIMILAR_TO('portada.jpg', k=10) USING HNSW` | SIFT + bag of visual words + IVF / HNSW |
+| 🎧 | **Audio** | `WHERE SIMILAR_TO('fragmento.mp3', k=5) USING IVF` | MFCC + bag of audio words + IVF / HNSW |
+
+Y debajo de todo eso, un motor de verdad: páginas de 4 KB, buffer pool con clock-sweep, catálogo en
+disco, transacciones con WAL, undo/redo, locks y `EXPLAIN ANALYZE` al estilo PostgreSQL.
+
+## Lo que hay detrás
+
+<table>
+<tr>
+<td align="center"><h3>13 643</h3>canciones con audio</td>
+<td align="center"><h3>10 031</h3>letras</td>
+<td align="center"><h3>20 005</h3>portadas</td>
+<td align="center"><h3>22 M</h3>descriptores SIFT y MFCC</td>
+</tr>
+<tr>
+<td align="center"><h3>1.8 ms</h3>por consulta con HNSW<br>(8 veces menos que revisar todo)</td>
+<td align="center"><h3>0.98</h3>recall@10 con HNSW</td>
+<td align="center"><h3>8</h3>índices hechos a mano</td>
+<td align="center"><h3>0</h3>bases de datos por debajo</td>
+</tr>
+</table>
+
+Nada de PostgreSQL ni Faiss por debajo: el parser, el almacenamiento, los índices (B+ agrupado y no
+agrupado, hash extensible, bitmap, R-Tree, SPIMI, IVF y HNSW) y los algoritmos externos están escritos
+por nosotros. Faiss y hnswlib solo aparecen en el benchmark, para compararnos: **nuestro HNSW iguala
+su recall**.
+
+## Cómo funciona una búsqueda por imagen o audio
+
+```mermaid
+flowchart LR
+    A["🖼️ portada.jpg<br>🎧 canción.mp3"] --> B["descriptores locales<br>SIFT 128 · MFCC 39"]
+    B --> C["codebook<br>K-Means, 1024 palabras"]
+    C --> D["histograma<br>TF-IDF"]
+    D --> E{"índice<br>vectorial"}
+    E -->|IVF| F["top k más<br>parecidos"]
+    E -->|HNSW| F
+    F --> G["SIMILARITY_SCORE()<br>en SQL"]
+```
+
+Es la misma idea que buscar texto, pero las "palabras" se fabrican: cada imagen o audio se parte en
+cientos de pedacitos, se agrupan los de toda la colección con K-Means y cada grupo pasa a ser una
+palabra. Después cada objeto es un histograma de palabras, como un documento.
+
+<p align="center">
+  <img src="docs/img/parte4/sift_puntos.jpg" alt="puntos SIFT" height="260">
+  <img src="docs/img/parte4/mfcc_pasos.jpg" alt="de la onda a los MFCC" height="260">
+  <img src="docs/img/parte4/hnsw_niveles.jpg" alt="búsqueda en HNSW" height="260">
+</p>
+<p align="center"><sub>Puntos SIFT en una portada · de la onda al espectrograma y a los MFCC · la búsqueda bajando por los niveles del HNSW</sub></p>
+
+## Resultados
+
+Comparamos IVF contra HNSW y euclidiana contra coseno, de 1 000 a 19 800 portadas y 10 000 audios:
+
+<p align="center">
+  <img src="benchmark/multimedia/graficas/consulta_vs_n.png" alt="tiempo por consulta vs tamaño" width="800">
+</p>
+
+| Coseno, k = 10 | Construir (20k portadas) | Consulta | Recall@10 portadas | Recall@10 audio |
+|---|---|---|---|---|
+| Búsqueda lineal | — | 14 ms | 1.000 | 1.000 |
+| **IVF** | 10 s | 2.6 ms | 0.941 | 0.922 |
+| **HNSW** | 175 s | **1.8 ms** | **0.981** | **0.987** |
+
+- **HNSW casi no se pone más lento al crecer**: con el doble de portadas sigue en ~2 ms, mientras la
+  búsqueda lineal se duplica
+- **IVF se construye 17 veces más rápido**, ideal si la colección cambia seguido
+- **Coseno le gana a la euclidiana** sobre vectores sin normalizar: con euclidiana el recall cae a 0.80
+
+El análisis completo, con galerías de aciertos y errores y la comparación con Faiss y hnswlib, está en
+[`benchmark/multimedia/`](benchmark/multimedia/README.md).
+
+## Pruébalo
 
 ```bash
 conda create -n vision python=3.12 && conda activate vision
-pip install -r requirements.txt                  # motor, multimedia, benchmark (faiss-cpu, hnswlib)
-pip install -r web/backend/requirements.txt      # API (FastAPI)
-cd web && npm install && cd ..                   # frontend (Next.js, necesita Node)
-./run_web.sh                                     # backend :8000 y frontend :3000
-```
-
-Pruebas: `python -m unittest discover -s tests -t .`. Las de la Parte 4 que necesitan `data/` se
-saltan solas si no está.
-
-## Organización
-
-| Carpeta | Qué hay |
-|---|---|
-| `parser/` | scanner, parser (AST), executor y `EXPLAIN` |
-| `storage/` | páginas, buffer pool, heap / sequential file, catálogo, WAL, `vector_index.py` |
-| `indexes/` | B+, hash extensible, bitmap, R-Tree, **IVF, HNSW y métricas** ([`VECTOR_README.md`](indexes/VECTOR_README.md)) |
-| `text_based/` | Parte 3: SPIMI, TF-IDF y BM25 ([`docs/SPIMI.md`](docs/SPIMI.md)) |
-| `multimedia/` | Parte 4: SIFT, MFCC, codebook y `ExtractFeatures` ([`README`](multimedia/README.md)) |
-| `benchmark/` | comparaciones de cada parte, la de la Parte 4 en [`benchmark/multimedia/`](benchmark/multimedia/README.md) |
-| `scripts/` | descarga del dataset |
-| `web/` | backend FastAPI (`web/backend/`) y frontend Next.js (`web/app/`) |
-| `tests/` | pruebas con `unittest` |
-
-## Dataset
-
-Canciones con audio, letra, portada y fotos de artistas e integrantes de bandas.
-Se descarga con los scripts de `scripts/` (detalles en [`data/README.md`](data/README.md)).
-No se sube al repo.
-
-| Dato | Fuente | Cantidad |
-|---|---|---|
-| Audio (preview 30 s), portada, foto del artista | Deezer API | 13 643 canciones |
-| Letra (texto y `.lrc` sincronizado) | LRCLIB | 10 031 con letra |
-| Portadas de otros álbumes de los mismos artistas | Deezer API | 20 005 portadas distintas |
-| Fotos extra de artistas | TheAudioDB, Wikidata + Wikimedia Commons | |
-| Persona o banda, integrantes y puesto | MusicBrainz (+ Wikidata) | |
-
-## Parte 4: búsqueda multimedia
-
-Dada una imagen o un audio, devolver los k más parecidos. Como no hay palabras, se fabrican
-(*bag of visual / audio words*):
-
-```
-archivo ─► SIFT / MFCC ─► codebook K-Means (K = 1024) ─► histograma TF-IDF ─► IVF / HNSW ─► SIMILAR_TO
-```
-
-| Paso | Dónde | Detalle |
-|---|---|---|
-| Descriptores locales | `multimedia/sift.py`, `mfcc.py` | [`multimedia/README.md`](multimedia/README.md#1-descriptores-locales) |
-| Codebook y TF-IDF | `multimedia/codebook.py`, `features.py` | [`multimedia/README.md`](multimedia/README.md#2-codebook-k-means) |
-| Métricas, IVF, HNSW | `indexes/metricas.py`, `ivf.py`, `hnsw.py` | [`indexes/VECTOR_README.md`](indexes/VECTOR_README.md) |
-| Índice en el motor | `storage/vector_index.py` | [`indexes/VECTOR_README.md`](indexes/VECTOR_README.md#en-el-motor-storagevector_indexpy) |
-| SQL | `parser/` | abajo |
-| Comparación | `benchmark/multimedia/` | [`benchmark/multimedia/README.md`](benchmark/multimedia/README.md) |
-
-### Preparar los vectores
-
-Con `data/` descargado (todo se puede cortar y volver a correr):
-
-```bash
-python -m multimedia.sift --source covers               # descriptores de portadas
-python -m multimedia.mfcc                               # descriptores de audio
-python -m multimedia.codebook --tipo ambos --ks 1024    # codebook
-python -m multimedia.features --tipo ambos --k 1024     # vectores TF-IDF de la colección
-```
-
-### SQL
-
-```
-Select     ::= SELECT Proj {, Proj}* FROM id WHERE Cond [UsingVec] [ORDER BY ...] [LIMIT num]
-SimilarTo  ::= SIMILAR_TO ( 'ruta' , [k =] num )
-UsingVec   ::= USING (IVF | HNSW) [WITH METRIC = (cosine | euclidean | dot)]
-Proj       ::= ... | SIMILARITY_SCORE ( ) [AS id]
-CreateIdx  ::= CREATE INDEX ON id ( columna ) USING (IVF | HNSW)
+pip install -r requirements.txt -r web/backend/requirements.txt
+cd web && npm install && cd ..
+./run_web.sh                      # API en :8000, consola web en :3000
 ```
 
 ```sql
@@ -89,28 +112,70 @@ CREATE TABLE canciones (id INT PRIMARY KEY, titulo VARCHAR(80), artista VARCHAR(
                         audio VARCHAR(40), portada VARCHAR(40)) USING HEAP;
 INSERT INTO canciones VALUES (1, 'MATADORA', 'KAROL G', 'audio/4176013632.mp3', 'covers/1037643992.jpg');
 CREATE INDEX ON canciones (portada) USING HNSW;
-CREATE INDEX ON canciones (audio) USING IVF;
 
--- portadas parecidas
-SELECT * FROM canciones
-    WHERE SIMILAR_TO('covers/1037643992.jpg', k=10)
-    USING HNSW WITH METRIC=cosine;
-
--- canciones que suenan parecido
 SELECT titulo, artista, SIMILARITY_SCORE() AS score FROM canciones
-    WHERE SIMILAR_TO('audio/4176013632.mp3', k=5)
-    USING IVF WITH METRIC=euclidean
+    WHERE SIMILAR_TO('covers/1037643992.jpg', k=10)
+    USING HNSW WITH METRIC=cosine
     ORDER BY score DESC;
 ```
 
-- La ruta de la consulta puede ser absoluta o relativa a `data/`, y no tiene que estar en la tabla:
+El dataset no está en el repo: se descarga con los scripts de [`scripts/`](data/README.md).
+Pruebas: `python run_all_tests.py`.
+
+---
+
+## Documentación
+
+| Tema | Dónde |
+|---|---|
+| Motor: parser, almacenamiento, B+, hash, bitmap, R-Tree, transacciones (Partes 1 y 2) | [`README-chuta.md`](README-chuta.md) |
+| Texto: SPIMI, TF-IDF, BM25 (Parte 3) | [`docs/SPIMI.md`](docs/SPIMI.md) |
+| Multimedia: SIFT, MFCC, codebook, TF-IDF (Parte 4) | [`multimedia/README.md`](multimedia/README.md) |
+| Índices vectoriales: métricas, IVF, HNSW | [`indexes/VECTOR_README.md`](indexes/VECTOR_README.md) |
+| Benchmark multimedia | [`benchmark/multimedia/README.md`](benchmark/multimedia/README.md) |
+| Dataset: fuentes, cómo se descarga, columnas | [`data/README.md`](data/README.md) |
+
+### Organización del código
+
+| Carpeta | Qué hay |
+|---|---|
+| `parser/` | scanner, parser (AST), executor y `EXPLAIN` |
+| `storage/` | páginas, buffer pool, heap / sequential file, catálogo, WAL, `vector_index.py` |
+| `indexes/` | B+, hash extensible, bitmap, R-Tree, IVF, HNSW y métricas |
+| `text_based/` | SPIMI, TF-IDF y BM25 |
+| `multimedia/` | SIFT, MFCC, codebook y `ExtractFeatures` |
+| `benchmark/` | comparaciones de cada parte |
+| `scripts/` | descarga del dataset |
+| `web/` | backend FastAPI (`web/backend/`) y frontend Next.js (`web/app/`) |
+| `tests/` | pruebas |
+
+### Dataset
+
+| Dato | Fuente | Cantidad |
+|---|---|---|
+| Audio (preview de 30 s), portada, foto del artista | Deezer API | 13 643 canciones |
+| Letra (texto y `.lrc` sincronizado) | LRCLIB | 10 031 con letra |
+| Portadas de otros álbumes de los mismos artistas | Deezer API | 20 005 portadas distintas |
+| Fotos extra de artistas | TheAudioDB, Wikidata + Wikimedia Commons | |
+| Persona o banda, integrantes y puesto | MusicBrainz (+ Wikidata) | |
+
+### SQL de la Parte 4
+
+```
+SimilarTo  ::= SIMILAR_TO ( 'ruta' , [k =] num )
+UsingVec   ::= USING (IVF | HNSW) [WITH METRIC = (cosine | euclidean | dot)]
+Proj       ::= ... | SIMILARITY_SCORE ( ) [AS id]
+CreateIdx  ::= CREATE INDEX ON id ( columna ) USING (IVF | HNSW)
+```
+
+- La ruta de la consulta puede ser absoluta o relativa a `data/` y no tiene que estar en la tabla:
   se le saca el vector con `ExtractFeatures`. La extensión dice si es imagen o audio
 - La columna indexada es un `VARCHAR` con rutas de imágenes o de audios (no mezcladas)
-- Sin `USING` se usa el índice vectorial que tenga la tabla para ese tipo, y si no tiene, búsqueda
-  lineal (`Seq Scan`). Sin `WITH METRIC` se usa coseno
+- Sin `USING` se usa el índice vectorial que tenga la tabla, y si no tiene, búsqueda lineal.
+  Sin `WITH METRIC` se usa coseno
 - `SIMILARITY_SCORE()`: mayor = más parecido. Coseno y dot dan la similitud, euclidean da 1 / (1 + d)
-- Se puede combinar con otras condiciones con `AND` (`... AND genero = 'pop'`) y con `LIMIT`.
-  No se permite dentro de un `OR`, con `JOIN` ni con agregaciones
+- Se combina con otras condiciones con `AND` y con `LIMIT`. No va dentro de un `OR`, con `JOIN` ni
+  con agregaciones
 
 ```
 EXPLAIN ANALYZE SELECT titulo, SIMILARITY_SCORE() AS score FROM canciones
@@ -124,21 +189,22 @@ Planning Time: 0.008 ms
 Execution Time: 50.985 ms
 ```
 
-### Resultados
+Para preparar los vectores desde cero (con `data/` descargado):
 
-Con 19 800 portadas y 10 000 audios, coseno, k = 10 (detalle, gráficas y galería en
-[`benchmark/multimedia/README.md`](benchmark/multimedia/README.md)):
+```bash
+python -m multimedia.sift --source covers               # descriptores de portadas
+python -m multimedia.mfcc                               # descriptores de audio
+python -m multimedia.codebook --tipo ambos --ks 1024    # codebook
+python -m multimedia.features --tipo ambos --k 1024     # vectores TF-IDF de la colección
+```
 
-| | construir (portadas) | consulta (portadas) | recall@10 portadas | recall@10 audio |
-|---|---|---|---|---|
-| Lineal | — | 14 ms | 1.000 | 1.000 |
-| IVF (nlist = √N, nprobe = 10) | 10.4 s | 2.6 ms | 0.941 | 0.922 |
-| HNSW (M = 16, ef = 50) | 175 s | 1.8 ms | 0.981 | 0.987 |
-
-HNSW para consultar (casi no crece con N), IVF si se reconstruye seguido, y coseno o vectores
-normalizados: con euclidiana sin normalizar el recall cae a 0.80–0.84.
-
-## Ideas para la Parte 5
+### Ideas para la Parte 5
 
 1. **Shazam:** reconocer la canción grabando unos segundos aunque haya ruido, con *audio fingerprinting* (picos del espectrograma como huella de la grabación, como hace Shazam). Se puede hacer con `librosa` o ver `audfprint` / `dejavu`
 2. **Detector cantando:** que alguien cante o tararee y diga qué canción es o cuál se parece más, con *query by humming*. Se saca la melodía con `librosa.pyin` y se compara con DTW (`librosa.sequence.dtw`), porque MFCC ignora la melodía a propósito
+
+## Equipo
+
+Grupo 3 · Base de Datos II · UTEC · Prof. Heider Sanchez
+
+Rodrigo De la Puente · Jimena Gurbillón · Yaritza López · Carlos Ordinola · Matías Walde
