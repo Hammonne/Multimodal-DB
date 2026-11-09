@@ -28,6 +28,7 @@ from executor import ExecuteVisitor  # noqa: E402
 from storage.storage_manager import StorageManager  # noqa: E402
 from web.backend.text_search import text_search  # noqa: E402
 from web.backend.multimedia_search import multimedia_search  # noqa: E402
+from web.backend.carga_media import preparar_zip, tipo_media  # noqa: E402
 
 
 class QueryRequest(BaseModel):
@@ -151,7 +152,7 @@ def health() -> dict[str, str]:
 def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
     filename = Path(request.filename).name
     suffix = Path(filename).suffix.lower()
-    if suffix not in {".csv", ".json", ".jsonl"} | MEDIA_EXTENSIONS or not re.fullmatch(
+    if suffix not in {".csv", ".json", ".jsonl", ".zip"} | MEDIA_EXTENSIONS or not re.fullmatch(
         r"[A-Za-z0-9._-]+", filename
     ):
         raise HTTPException(
@@ -168,10 +169,21 @@ def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
             status_code=413,
             detail="el archivo supera el límite de 50 MB",
         )
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError as error:
-        raise HTTPException(status_code=400, detail="el CSV debe estar codificado en UTF-8") from error
+    csv_preparado = None
+    if suffix == ".zip":
+        # dataset propio: imágenes o audios (con o sin csv); queda un csv listo para IMPORT INTO
+        try:
+            text, csv_preparado = preparar_zip(content, filename, ROOT / "data")
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        filename = Path(csv_preparado).name
+    elif suffix in MEDIA_EXTENSIONS:
+        text = ""
+    else:
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise HTTPException(status_code=400, detail="el CSV debe estar codificado en UTF-8") from error
     if suffix in MEDIA_EXTENSIONS:
         media_dir = ROOT / "data" / "uploads" / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
@@ -183,7 +195,7 @@ def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
         sql = (
             f"CREATE TABLE {table} (\n"
             "  id VARCHAR(255) PRIMARY KEY,\n"
-            "  path VARCHAR(500)\n"
+            f"  path {'IMAGE' if kind == 'sift' else 'AUDIO'}\n"
             ") USING HEAP;\n\n"
             f"INSERT INTO {table} VALUES ('{media_id}', "
             f"'uploads/media/{filename}');"
@@ -261,6 +273,13 @@ def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
     def infer_type(column: str) -> str:
         values = [row.get(column, "").strip() for row in sample if row.get(column, "").strip()]
         normalized_column = column.strip().lower()
+        # una columna cuyos valores son nombres de imágenes o de audios
+        tipos_media = {tipo_media(value) for value in values}
+        if values and len(tipos_media) == 1 and None not in tipos_media:
+            return tipos_media.pop()
+        if normalized_column in {"nombre", "name", "titulo", "title"}:
+            max_length = max([len(value) for value in values] + [1])
+            return f"VARCHAR({min(max(max_length + 20, 32), 1000)})"
         if normalized_column == "id" or normalized_column.endswith("_id"):
             # External identifiers (Deezer, albums, tracks, etc.) are not
             # bounded by the storage engine's signed 32-bit INT.
@@ -290,12 +309,13 @@ def upload_csv(request: CsvUploadRequest) -> CsvUploadResponse:
         {"name": column, "type": infer_type(column)}
         for column in reader.fieldnames
     ]
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    target = UPLOAD_DIR / filename
-    target.write_bytes(content)
+    if csv_preparado is None:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        target = UPLOAD_DIR / filename
+        target.write_bytes(content)
     return CsvUploadResponse(
         filename=filename,
-        path=f"data/uploads/{filename}",
+        path=csv_preparado or f"data/uploads/{filename}",
         columns=[CsvColumn(**column) for column in columns],
         rows=len(sample),
         kind="csv",
