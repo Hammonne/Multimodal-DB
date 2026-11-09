@@ -40,7 +40,7 @@ disco, transacciones con WAL, undo/redo, locks y `EXPLAIN ANALYZE` al estilo Pos
 <td align="center"><h3>22 M</h3>descriptores SIFT y MFCC</td>
 </tr>
 <tr>
-<td align="center"><h3>1.8 ms</h3>por consulta con HNSW<br>(8 veces menos que revisar todo)</td>
+<td align="center"><h3>1.5 ms</h3>por consulta con HNSW<br>(9.5 veces menos que revisar todo)</td>
 <td align="center"><h3>0.98</h3>recall@10 con HNSW</td>
 <td align="center"><h3>8</h3>índices hechos a mano</td>
 <td align="center"><h3>0</h3>bases de datos por debajo</td>
@@ -78,7 +78,8 @@ palabra. Después cada objeto es un histograma de palabras, como un documento.
 
 ## Resultados
 
-Comparamos IVF contra HNSW y euclidiana contra coseno, de 1 000 a 19 800 portadas y 10 000 audios:
+Comparamos la búsqueda lineal (revisar toda la base) contra IVF y HNSW, de 1 000 a 19 800 portadas y
+10 000 audios:
 
 <p align="center">
   <img src="benchmark/multimedia/graficas/consulta_vs_n.png" alt="tiempo por consulta vs tamaño" width="800">
@@ -86,14 +87,26 @@ Comparamos IVF contra HNSW y euclidiana contra coseno, de 1 000 a 19 800 portada
 
 | Coseno, k = 10 | Construir (20k portadas) | Consulta | Recall@10 portadas | Recall@10 audio |
 |---|---|---|---|---|
-| Búsqueda lineal | — | 14 ms | 1.000 | 1.000 |
-| **IVF** | 10 s | 2.6 ms | 0.941 | 0.922 |
-| **HNSW** | 175 s | **1.8 ms** | **0.981** | **0.987** |
+| Búsqueda lineal | — | 14.4 ms | 1.000 | 1.000 |
+| **IVF** | 11 s | 2.6 ms | 0.941 | 0.922 |
+| **HNSW** | 174 s | **1.5 ms** | **0.981** | **0.987** |
 
-- **HNSW casi no se pone más lento al crecer**: con el doble de portadas sigue en ~2 ms, mientras la
-  búsqueda lineal se duplica
+<p align="center">
+  <img src="benchmark/multimedia/graficas/recall_vs_n.png" alt="recall@10 vs tamaño" width="800">
+</p>
+<p align="center"><sub>Recall@10: de los 10 vecinos exactos (búsqueda lineal), cuántos devuelve cada índice</sub></p>
+
+- **Con índice, cada consulta es 4–10 veces más rápida que la búsqueda lineal**, y la ventaja crece
+  con N: con el doble de portadas HNSW sigue en ~1.5 ms mientras la lineal se duplica. Con menos de
+  ~2 500 objetos la lineal todavía gana
 - **IVF se construye 17 veces más rápido**, ideal si la colección cambia seguido
 - **Coseno le gana a la euclidiana** sobre vectores sin normalizar: con euclidiana el recall cae a 0.80
+
+También probamos consultas como las de una app real. Con fotos reales de **600 CDs, vinilos y casetes**
+bajadas de Discogs, el 66 % encuentra su portada digital en el top 10 (~70 % en CDs y vinilos, casi siempre
+primera). Con data augmentation, rotar, pasar a blanco y negro o cambiar los colores casi no afecta
+(0.99–1.00), porque SIFT trabaja en gris y es invariante a la rotación. Un fragmento de audio grabado con
+celular, en cambio, no acierta nunca, porque MFCC no aguanta que se pierdan frecuencias.
 
 El análisis completo, con galerías de aciertos y errores y la comparación con Faiss y hnswlib, está en
 [`benchmark/multimedia/`](benchmark/multimedia/README.md).
