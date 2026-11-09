@@ -4,6 +4,7 @@
 # la respuesta correcta es la portada digital de deezer que ya está en la base
 # uso: python3 scripts/fetch_fotos_reales.py --total 250
 #      python3 scripts/fetch_fotos_reales.py --ediciones 6   (más ediciones de los álbumes que ya tienen foto)
+#      python3 scripts/fetch_fotos_reales.py --artista "KAROL G" --ediciones 6   (todos los álbumes de un artista)
 import argparse
 import os
 import random
@@ -48,7 +49,7 @@ def ediciones(artista, album, maximo):
     return salida
 
 
-def mas_ediciones(args):
+def mas_ediciones(args, solo=None):
     # para los álbumes que ya tienen foto: la portada (foto principal) de sus otras ediciones físicas
     salida = os.path.join(args.out, "fotos_reales.csv")
     filas = load_csv(salida)
@@ -56,7 +57,8 @@ def mas_ediciones(args):
     hechos = set(open(hechos_csv).read().split()) if os.path.exists(hechos_csv) else set()
     albumes = {}
     for f in filas:
-        albumes.setdefault(f["album_id"], f)
+        if solo is None or f["album_id"] in solo:
+            albumes.setdefault(f["album_id"], f)
     with open(hechos_csv, "a") as log:
         for n, (aid, f) in enumerate(albumes.items(), 1):
             if aid in hechos:
@@ -88,8 +90,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ediciones", type=int, default=0,
                     help="en vez de buscar álbumes nuevos, baja hasta N ediciones de los que ya tienen foto")
+    ap.add_argument("--artista", default="", help="solo los álbumes de este artista (nombre como en artists.csv)")
     args = ap.parse_args()
-    if args.ediciones:
+    if args.ediciones and not args.artista:
         mas_ediciones(args)
         return
 
@@ -97,6 +100,9 @@ def main():
     portadas = [r for r in load_csv(os.path.join(args.out, "covers.csv"))
                 if not r["duplicada_de"] and r["album"] and r["artist_id"] in nombres]
     random.Random(args.seed).shuffle(portadas)
+    if args.artista:
+        portadas = [p for p in portadas if nombres[p["artist_id"]].casefold() == args.artista.casefold()]
+        args.total = 10 ** 6
 
     salida = os.path.join(args.out, "fotos_reales.csv")
     carpeta = os.path.join(args.out, "fotos_reales")
@@ -110,14 +116,14 @@ def main():
         for p in portadas:
             if len(con_foto) >= args.total:
                 break
-            if p["album_id"] in probados:
+            if p["album_id"] in probados and not args.artista:
                 continue
             probados.add(p["album_id"])
             log.write(p["album_id"] + "\n")
             log.flush()
             artista = nombres[p["artist_id"]]
             rid, formato = buscar_edicion(artista, p["album"])
-            if not rid:
+            if not rid or p["album_id"] in con_foto:
                 continue
             imagenes = (http_get(f"{API}/releases/{rid}") or {}).get("images") or []
             principal = [i for i in imagenes if i.get("type") == "primary"][:1]
@@ -138,6 +144,8 @@ def main():
                 print(f"[{len(con_foto)}/{args.total}] {artista} - {p['album']} ({formato}, "
                       f"{len(nuevas)} fotos)", flush=True)
     print(f"{len(con_foto)} álbumes con foto de {len(probados)} probados -> {salida}")
+    if args.artista and args.ediciones:
+        mas_ediciones(args, {p["album_id"] for p in portadas})
 
 
 if __name__ == "__main__":

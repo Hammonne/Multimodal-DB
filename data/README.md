@@ -209,6 +209,8 @@ quedan como registro). Necesita `artist_types.csv`, así que va después de
 `fotos_reales_probados.txt` guarda los álbumes ya buscados, así el script sigue donde se quedó.
 Con `--ediciones 6` baja además la portada de hasta 6 ediciones físicas más de cada álbum que ya tiene foto
 (625 fotos más; 96 álbumes quedan con 5 fotos de frente o más). Lo hecho queda en `fotos_reales_ediciones.txt`.
+Con `--artista "KAROL G" --ediciones 6` baja las fotos de todos los álbumes de un artista (Karol G: 4 álbumes con
+edición física, 25 fotos). Después hay que rearmar la colección de la web con `python -m web.backend.multimedia_search`.
 
 `aumentadas_web.csv` tiene las 8 versiones modificadas de 60 álbumes que también tienen foto real (para el
 grupo "Ambos" de la web); `consultas_aumentadas.csv` son las 100 del benchmark.
