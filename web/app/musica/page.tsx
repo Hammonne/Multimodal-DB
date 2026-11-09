@@ -391,7 +391,7 @@ function PaginaBuscar(_: Ctx & { inicial: string }) {
   );
 }
 
-type Candidato = { nombre: string; artista_id: string; banda: string; foto: string; distancia: number; misma_persona: boolean };
+type Candidato = { nombre: string; artista_id: string; banda: string; foto: string; distancia: number; misma_persona: boolean; otras: string[] };
 type RespuestaCaras = { caras: { caja: number[]; candidatos: Candidato[] }[]; ancho: number; alto: number; tecnico: Tecnico };
 type RespuestaPortada = { tipo: string; resultados: (Album & Cancion)[]; tecnico: Tecnico };
 
@@ -540,26 +540,39 @@ function PaginaReconocer(ctx: Ctx) {
         {recuadros.map((c, i) => <Recuadro key={i} c={c} ancho={caras!.ancho} alto={caras!.alto} espejo activa={recuadros.length > 1 && i === indiceCara} onClick={() => setElegida(i)} />)}
         {fuente === "vivo" && enVivo && <span className={styles.enVivo}>● EN VIVO</span>}
       </div>}
-      </div>
-      {que === "cara" && cara && <aside className={styles.top10}>
-        <span className={styles.etiqueta}>Top {cara.candidatos.length} más parecidos · HNSW, euclidiana</span>
-        {recuadros.length > 1 && <p className={styles.ayuda}>Hay {recuadros.length} caras: toca un recuadro para ver su top.</p>}
-        {cara.candidatos.map((m, i) => <button key={`${m.nombre}-${i}`} className={`${styles.top10Fila} ${i === 0 ? styles.top10Primero : ""}`} onClick={() => m.artista_id && ctx.ir({ tipo: "artista", id: m.artista_id })}>
-          <span className={styles.top10Puesto}>{i + 1}</span>
-          <Imagen src={m.foto} redonda alt={m.nombre} />
-          <span className={styles.top10Texto}><b>{m.nombre}</b><small>{m.banda ? `integrante de ${m.banda}` : m.misma_persona ? "misma persona" : "se parece"}</small></span>
-          <span className={styles.top10Distancia}><b>{m.distancia.toFixed(3)}</b><i style={{ width: `${Math.max(4, 100 - m.distancia * 140)}%` }} /></span>
-        </button>)}
-        <p className={styles.ayuda}>Distancia euclidiana entre embeddings de 128 dims; menor = más parecido. Bajo 0.45 se considera la misma persona.</p>
-      </aside>}
-      </div>
-
       <div className={styles.botones}>
         {fuente === "vivo"
           ? <button className={styles.botonVerde} onClick={alternarVivo}>{enVivo ? <><Pause size={16} fill="currentColor" /> Detener</> : <><Play size={16} fill="currentColor" /> Empezar a reconocer</>}</button>
           : <button className={styles.botonVerde} onClick={reconocer} disabled={cargando || (fuente === "archivo" && !archivo)}><Sparkles size={16} /> {cargando ? "Reconociendo..." : fuente === "camara" ? "Tomar foto y reconocer" : "Reconocer"}</button>}
       </div>
       {error && <p className={styles.ayuda}>{error}</p>}
+      {que === "cara" && cara?.candidatos[0] && cara.candidatos[0].otras.length > 0 && <div className={styles.otrasFotos}>
+        <span className={styles.etiqueta}>Otras fotos de {cara.candidatos[0].nombre}</span>
+        <p className={styles.ayuda}>Las caras con las que face_recognition calculó sus embeddings.</p>
+        <div className={styles.galeriaCaras}>{cara.candidatos[0].otras.map((f) => <CaraImg key={f} path={f} alt={cara.candidatos[0].nombre} />)}</div>
+      </div>}
+      </div>
+      {que === "cara" && cara && <aside className={styles.top10}>
+        {cara.candidatos[0] && <button className={styles.top1} onClick={() => cara.candidatos[0].artista_id && ctx.ir({ tipo: "artista", id: cara.candidatos[0].artista_id })}>
+          <CaraImg path={cara.candidatos[0].foto} alt={cara.candidatos[0].nombre} />
+          <span className={styles.top1Texto}>
+            <span className={styles.etiqueta}>Te pareces más a</span>
+            <b>{cara.candidatos[0].nombre}</b>
+            <small>{cara.candidatos[0].banda ? `integrante de ${cara.candidatos[0].banda} · ` : ""}distancia {cara.candidatos[0].distancia.toFixed(3)}</small>
+            <em className={cara.candidatos[0].misma_persona ? styles.insigniaOk : styles.insignia}>{cara.candidatos[0].misma_persona ? "misma persona (< 0.45)" : "se parece (≥ 0.45)"}</em>
+          </span>
+        </button>}
+        <span className={styles.etiqueta}>Top {cara.candidatos.length} más parecidos · HNSW, euclidiana</span>
+        {recuadros.length > 1 && <p className={styles.ayuda}>Hay {recuadros.length} caras: toca un recuadro para ver su top.</p>}
+        {cara.candidatos.map((m, i) => <button key={`${m.nombre}-${i}`} className={`${styles.top10Fila} ${i === 0 ? styles.top10Primero : ""}`} onClick={() => m.artista_id && ctx.ir({ tipo: "artista", id: m.artista_id })}>
+          <span className={styles.top10Puesto}>{i + 1}</span>
+          <CaraImg path={m.foto} alt={m.nombre} redonda />
+          <span className={styles.top10Texto}><b>{m.nombre}</b><small>{m.banda ? `integrante de ${m.banda}` : m.misma_persona ? "misma persona" : "se parece"}</small></span>
+          <span className={styles.top10Distancia}><b>{m.distancia.toFixed(3)}</b><i style={{ width: `${Math.max(4, 100 - m.distancia * 140)}%` }} /></span>
+        </button>)}
+        <p className={styles.ayuda}>Distancia euclidiana entre embeddings de 128 dims; menor = más parecido. Bajo 0.45 se considera la misma persona.</p>
+      </aside>}
+      </div>
 
       {que === "cara" && caras && <>
         {!caras.caras.length && <p className={styles.ayuda}>No encontré caras. Acércate un poco y mira a la cámara con buena luz.</p>}
@@ -574,6 +587,13 @@ function PaginaReconocer(ctx: Ctx) {
       </>}
     </div>
   );
+}
+
+function CaraImg({ path, alt, redonda }: { path: string; alt: string; redonda?: boolean }) {
+  // el recorte de la cara que usó face_recognition (no la foto de perfil completa)
+  const [error, setError] = useState(false);
+  if (!path || error) return <div className={`${styles.imagenVacia} ${redonda ? styles.redonda : ""}`}><Users size={22} /></div>;
+  return <img className={`${styles.imagen} ${redonda ? styles.redonda : ""}`} src={`${API}/api/app/cara-recorte?path=${encodeURIComponent(path)}`} alt={alt} loading="lazy" onError={() => setError(true)} />;
 }
 
 function Recuadro({ c, ancho, alto, espejo, activa, onClick }: { c: { caja: number[]; candidatos: Candidato[] }; ancho: number; alto: number; espejo?: boolean; activa?: boolean; onClick?: () => void }) {

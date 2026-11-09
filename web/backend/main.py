@@ -461,6 +461,13 @@ def app_reconocer_portada(request: AppCamaraRequest) -> dict[str, Any]:
     return _app(catalogo.reconocer_portada_bytes, _bytes(request.content_base64), request.en_vivo)
 
 
+@app.get("/api/app/cara-recorte")
+def app_cara_recorte(path: str):
+    from fastapi.responses import Response
+    contenido = _app(catalogo.recorte_cara, path)
+    return Response(content=contenido, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+
 @app.get("/api/app/actividad")
 def app_actividad(limite: int = 100) -> dict[str, Any]:
     return {"actividad": catalogo.actividad(limite)}

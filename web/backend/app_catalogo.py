@@ -93,6 +93,12 @@ class Catalogo:
             self.albumes_de_artista = defaultdict(list)
             for a in self.albumes.values():
                 self.albumes_de_artista[a["artista_id"]].append(a["id"])
+            # dónde está la cara en cada foto (lo guardó scripts/filter_artist_faces.py): para recortarla
+            self.caja_cara = {}
+            for archivo in ("artist_faces.csv", "member_faces.csv"):
+                for r in _leer(d / archivo):
+                    if r.get("kind") == "cara" and r.get("face_box"):
+                        self.caja_cara[r["path"]] = [int(v) for v in r["face_box"].split()]
             self.fotos_artista = defaultdict(list)
             for r in _leer(d / "artist_images.csv"):
                 if (d / r["path"]).is_file():
@@ -361,13 +367,14 @@ class Catalogo:
             res = caras.buscar_embedding(datos, indice, emb, k=10)
             revisados += int(indice.candidatos)
             candidatos = []
-            for r in res:
+            for n, r in enumerate(res):
                 artista_id = r["id"] if r["tipo"] == "artist" else self.banda_de.get(r["id"], "")
                 art = self.artistas.get(artista_id, {})
                 candidatos.append({"nombre": r["nombre"], "artista_id": artista_id,
                                    "banda": art.get("nombre", "") if r["tipo"] == "member" else "",
                                    "foto": r["foto"], "distancia": r["distancia"],
-                                   "misma_persona": r["misma_persona"]})
+                                   "misma_persona": r["misma_persona"],
+                                   "otras": self._otras_caras(datos, r["tipo"], r["id"]) if n == 0 else []})
             salida.append({"caja": [round(v / escala) for v in (top, right, bottom, left)],
                            "candidatos": candidatos})
         t_busqueda = (time.perf_counter() - t0) * 1000
@@ -387,6 +394,35 @@ class Catalogo:
         return {"caras": salida, "ancho": ancho, "alto": alto,
                 "tecnico": {"indice": "HNSW", "revisados": revisados, "total": len(datos["embedding"]),
                             "ms": t_busqueda, "extraccion_ms": t_cara}}
+
+    def recorte_cara(self, path: str, lado: int = 256) -> bytes:
+        # la cara (con un margen) de una foto del dataset, en jpg cuadrado; se guarda para no recortar otra vez
+        import cv2
+        self._cargar()
+        caja = self.caja_cara.get(path)
+        if caja is None:
+            raise KeyError("esa foto no tiene una cara marcada")
+        cache = self.data / "features" / "caras_recortes" / (re.sub(r"[^\w.-]", "_", path) + ".jpg")
+        if cache.is_file():
+            return cache.read_bytes()
+        img = cv2.imread(str(self.data / path))
+        if img is None:
+            raise KeyError("no se pudo leer la foto")
+        top, right, bottom, left = caja
+        cx, cy, t = (left + right) / 2, (top + bottom) / 2, max(right - left, bottom - top) * 1.6
+        x0, y0 = int(max(0, cx - t / 2)), int(max(0, cy - t / 2))
+        x1, y1 = int(min(img.shape[1], cx + t / 2)), int(min(img.shape[0], cy + t / 2))
+        recorte = cv2.resize(img[y0:y1, x0:x1], (lado, lado))
+        ok, buf = cv2.imencode(".jpg", recorte, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(buf.tobytes())
+        return buf.tobytes()
+
+    def _otras_caras(self, datos, tipo: str, dueno: str, limite: int = 8) -> list[str]:
+        # todas las fotos con cara de esa persona en faces.npz (las que usó face_recognition)
+        import numpy as np
+        mias = np.flatnonzero((datos["kind"] == tipo) & (datos["owner_id"] == dueno))
+        return [str(datos["path"][i]) for i in mias[:limite]]
 
     def reconocer_portada_bytes(self, contenido: bytes, en_vivo: bool = False) -> dict[str, Any]:
         # un cuadro de la cámara: se guarda en un archivo temporal para sacarle los sift y se borra

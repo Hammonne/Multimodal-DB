@@ -168,3 +168,16 @@
 .top10Texto small { color: var(--suave); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top10Distancia { display: flex; flex-direction: column; gap: 4px; font: 12px 'IBM Plex Mono', monospace; text-align: right; }
 .top10Distancia i { display: block; height: 4px; border-radius: 4px; background: var(--acento); margin-left: auto; }
+
+.top1 { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; align-items: center; padding: 10px !important; margin-bottom: 8px; border-radius: 10px; background: rgba(224,162,74,.12) !important; text-align: left; }
+.top1:hover { background: rgba(224,162,74,.2) !important; }
+.top1 .imagen, .top1 .imagenVacia { width: 150px; border-radius: 10px; }
+.top1Texto { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.top1Texto b { font-size: 22px; line-height: 1.15; }
+.top1Texto small { color: var(--suave); font-size: 12.5px; }
+.insignia, .insigniaOk { align-self: flex-start; margin-top: 4px; padding: 3px 8px; border-radius: 999px; font: 600 11px 'IBM Plex Mono', monospace; font-style: normal; background: #3a2a2a; color: #f0b3a8; }
+.insigniaOk { background: var(--acento); color: #1a1206; }
+.otrasFotos { margin-top: 18px; }
+.galeriaCaras { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; max-width: 720px; }
+.galeriaCaras .imagen, .galeriaCaras .imagenVacia { border-radius: 8px; box-shadow: none; }
+.reconocerFila .botones { margin-top: 12px; }
