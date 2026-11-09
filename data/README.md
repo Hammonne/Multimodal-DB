@@ -208,6 +208,13 @@ quedan como registro). Necesita `artist_types.csv`, así que va después de
 
 `fotos_reales_probados.txt` guarda los álbumes ya buscados, así el script sigue donde se quedó.
 
+## Data augmentation: consultas_aumentadas.csv
+
+`python -m benchmark.multimedia.aumentadas --n 100` toma portadas de `covers.csv` que no tienen foto real
+y guarda en `consultas_aumentadas/` 8 versiones de cada una (rotar 90° y 25°, espejo, blanco y negro,
+otros colores, más contraste, desenfoque y recorte). Columnas: `album_id`, `original` (la portada en
+`covers/`), `album`, `cambio` y `path`.
+
 ## Corpus textual para la demo web
 
 La pestaña **Texto** espera un archivo local `data/lyrics.jsonl`. Como los

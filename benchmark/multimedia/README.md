@@ -209,6 +209,37 @@ normalizados, coseno, búsqueda exacta; el HNSW da casi lo mismo, recall 0.98):
 Las fotos (76 MB) quedan en `data/fotos_reales/` con su lista en `data/fotos_reales.csv`; no se suben
 al repo.
 
+### Data augmentation: rotar, espejo, blanco y negro, otros colores…
+
+Para las portadas que no tienen foto real, `python -m benchmark.multimedia.aumentadas` toma 100 al azar,
+les aplica 8 cambios a cada una (800 consultas) y busca la original entre las 20 005:
+
+| cambio | la original sale 1.° | en el top 10 |
+|---|---|---|
+| rotar 90° | 1.00 | 1.00 |
+| blanco y negro | 1.00 | 1.00 |
+| otros colores (tono girado 90°) | 0.97 | 0.99 |
+| espejo | 0.93 | 1.00 |
+| más contraste y brillo | 0.84 | 0.92 |
+| rotar 25° | 0.81 | 0.86 |
+| desenfoque | 0.54 | 0.70 |
+| recorte 50 % + rotar 10° | 0.16 | 0.27 |
+
+![data augmentation](graficas/aumentadas.png)
+
+- **El color no importa:** SIFT trabaja en escala de grises, así que blanco y negro y otros colores dan
+  casi lo mismo que la original
+- **La rotación tampoco:** cada punto SIFT guarda su orientación y el descriptor se calcula relativo a
+  ella. Rotar 90° es exacto; rotar 25° baja un poco porque interpola píxeles y deja bordes blancos
+- **El espejo acierta más de lo esperado:** SIFT no es invariante a reflejos (cada descriptor reflejado
+  es otro), pero muchos patrones (bordes, esquinas, manchas) son casi simétricos y el codebook de 1 024
+  palabras es lo bastante grueso para que caigan en las mismas palabras
+- **El desenfoque sí afecta:** borra los detalles finos donde SIFT encuentra sus puntos
+- **Recortar a la mitad es lo peor:** se pierde el 75 % de la imagen y con ella la mayoría de las palabras
+
+Las imágenes quedan en `data/consultas_aumentadas/` (lista en `data/consultas_aumentadas.csv`) y se
+pueden usar como consulta en la web.
+
 ### Galería: aciertos y errores
 
 Consulta modificada a la izquierda y los 5 primeros resultados; borde verde = el original.
@@ -247,6 +278,7 @@ sirve para las tres métricas del `WITH METRIC`.
 | `galeria_foto_simulada.jpg` | solo las fotos simuladas, con HNSW coseno |
 | `galeria_fotos_reales.jpg` | fotos reales de Discogs, aciertos y errores |
 | `fotos_reales.json` | resultado de cada foto real |
+| `aumentadas.png`, `aumentadas.json` | data augmentation: una portada con sus 8 cambios y aciertos por cambio |
 | `tabla.md` | todos los números con el N más grande, con las librerías |
 | `resultados.json` | todos los números |
 
@@ -266,6 +298,7 @@ El enunciado pide también 100 000 objetos. El dataset tiene 10 000 canciones y 
 - Se volvió a correr todo con 19 800 portadas y 10 000 audios
 - Fotos reales de 250 CDs, vinilos y casetes bajadas de Discogs (`scripts/fetch_fotos_reales.py`) y
   evaluadas con `benchmark/multimedia/fotos_reales.py`
+- Data augmentation de 100 portadas sin foto real con 8 cambios (`benchmark/multimedia/aumentadas.py`)
 
 ## Referencias
 
