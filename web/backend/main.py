@@ -26,6 +26,7 @@ from parser import Parser  # noqa: E402
 from scanner import Scanner  # noqa: E402
 from executor import ExecuteVisitor  # noqa: E402
 from storage.storage_manager import StorageManager  # noqa: E402
+from web.backend.app_catalogo import catalogo  # noqa: E402
 from web.backend.text_search import text_search  # noqa: E402
 from web.backend.multimedia_search import multimedia_search  # noqa: E402
 
@@ -368,6 +369,103 @@ def precalentar_multimedia() -> None:
     multimedia_search.precalentar()
 
 
+# app: la vista tipo reproductor de música (web/app/musica/page.tsx)
+
+class AppReconocerRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=30_000_000)
+
+
+def _app(funcion, *args):
+    try:
+        return funcion(*args)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (FileNotFoundError, ValueError, RuntimeError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/app/inicio")
+def app_inicio() -> dict[str, Any]:
+    return _app(catalogo.inicio)
+
+
+@app.get("/api/app/artista/{artista_id}")
+def app_artista(artista_id: str) -> dict[str, Any]:
+    return _app(catalogo.artista, artista_id)
+
+
+@app.get("/api/app/artista/{artista_id}/se-parece")
+def app_artista_se_parece(artista_id: str) -> dict[str, Any]:
+    return _app(catalogo.se_parece, artista_id)
+
+
+@app.get("/api/app/album/{album_id}")
+def app_album(album_id: str) -> dict[str, Any]:
+    return _app(catalogo.album, album_id)
+
+
+@app.get("/api/app/album/{album_id}/parecidos")
+def app_album_parecidos(album_id: str) -> dict[str, Any]:
+    return _app(catalogo.portadas_parecidas, album_id)
+
+
+@app.get("/api/app/cancion/{track_id}")
+def app_cancion(track_id: str) -> dict[str, Any]:
+    return _app(catalogo.cancion, track_id)
+
+
+@app.get("/api/app/cancion/{track_id}/parecidas")
+def app_cancion_parecidas(track_id: str) -> dict[str, Any]:
+    return _app(catalogo.suena_parecido, track_id)
+
+
+@app.post("/api/app/reconocer")
+def app_reconocer(request: AppReconocerRequest) -> dict[str, Any]:
+    filename = Path(request.filename).name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in MEDIA_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="sube una foto (jpg, png...) o un audio (mp3, wav...)")
+    try:
+        content = base64.b64decode(request.content_base64, validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="el contenido no es Base64 válido") from error
+    destino = ROOT / "data" / "uploads" / "consultas"
+    destino.mkdir(parents=True, exist_ok=True)
+    seguro = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename).stem)[:80] or "consulta"
+    path = destino / f"{int(time.time() * 1000)}_{seguro}{suffix}"
+    path.write_bytes(content)
+    return _app(catalogo.reconocer, path)
+
+
+class AppCamaraRequest(BaseModel):
+    # un cuadro de la cámara (o una foto) en base64, sin guardarlo en data/
+    content_base64: str = Field(min_length=1, max_length=20_000_000)
+    en_vivo: bool = False
+
+
+def _bytes(contenido: str) -> bytes:
+    try:
+        return base64.b64decode(contenido, validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="el contenido no es Base64 válido") from error
+
+
+@app.post("/api/app/reconocer-cara")
+def app_reconocer_cara(request: AppCamaraRequest) -> dict[str, Any]:
+    return _app(catalogo.reconocer_caras, _bytes(request.content_base64), request.en_vivo)
+
+
+@app.post("/api/app/reconocer-portada")
+def app_reconocer_portada(request: AppCamaraRequest) -> dict[str, Any]:
+    return _app(catalogo.reconocer_portada_bytes, _bytes(request.content_base64), request.en_vivo)
+
+
+@app.get("/api/app/actividad")
+def app_actividad(limite: int = 100) -> dict[str, Any]:
+    return {"actividad": catalogo.actividad(limite)}
+
+
 @app.post("/api/multimedia/search-file")
 def search_multimedia_file(request: MultimediaFileSearchRequest) -> dict[str, Any]:
     # la consulta es una imagen o un audio subido desde la web, no un objeto de la base
@@ -420,9 +518,10 @@ def multimedia_consultas_ejemplo() -> dict[str, Any]:
 
 
 @app.get("/api/multimedia/examples")
-def multimedia_examples(kind: str = "sift") -> dict[str, Any]:
+def multimedia_examples(kind: str = "sift", grupo: str = "", offset: int = 0, limit: int = 16) -> dict[str, Any]:
     try:
-        return {"kind": kind, "ids": multimedia_search.examples(kind)}
+        return {"kind": kind, "grupo": grupo,
+                **multimedia_search.examples(kind, max(1, min(limit, 64)), grupo, max(0, offset))}
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 

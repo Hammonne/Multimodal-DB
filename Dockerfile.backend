@@ -4,6 +4,10 @@ WORKDIR /app
 
 COPY web/backend/requirements.txt /tmp/backend-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/backend-requirements.txt
+# reconocimiento de caras (como en el lab 11): dlib-bin trae dlib ya compilado; face_recognition va sin
+# dependencias para que pip no intente compilar dlib desde cero
+RUN pip install --no-cache-dir dlib-bin face_recognition_models Pillow "setuptools<81" \
+    && pip install --no-cache-dir --no-deps face_recognition
 
 COPY . .
 
