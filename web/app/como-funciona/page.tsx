@@ -18,6 +18,8 @@ type DatosPalabras = { fondo: number[][]; centroides: number[][]; portada: numbe
 type DatosIvf = { puntos: number[][]; centroides: number[][]; nlist: number; consulta: number; orden_celdas: number[]; abiertas: number[]; revisados: number; resultado: number[]; exactos: number[]; aciertos: number; imagenes: Record<string, string> };
 type DatosHnsw = { nodos: number[][]; aristas: Record<string, number[][]>; entrada: number; max_nivel: number; consulta: number; consulta_xy: number[]; niveles: { nivel: number; camino: number[]; visitados: number[] }[]; nivel0_visitados: number[]; resultado: number[]; por_nivel: number[]; imagenes: Record<string, string> };
 
+type DatosCaras = { path: string; nombre: string; ancho: number; alto: number; caja: number[]; puntos: Record<string, number[][]>; embedding: number[]; bordes: number[]; hist_misma: number[]; hist_otras: number[]; n_misma: number; n_otras: number; umbral: number; otras_fotos: string[]; mapa: number[][]; mapa_persona: number[][]; mapa_yo: number[]; vecinos: { nombre: string; foto: string; distancia: number; misma_persona: boolean; xy: number[] }[]; revisados: number; total: number };
+
 async function pedir<T>(path: string): Promise<T> {
   const r = await fetch(`${API}${path}`);
   const d = await r.json();
@@ -441,6 +443,105 @@ function CaminoHnsw({ hn }: { hn: DatosHnsw }) {
   );
 }
 
+const recorte = (p: string) => `${API}/api/app/cara-recorte?path=${encodeURIComponent(p)}`;
+
+function SeccionCaras({ r }: { r: Resumen | null }) {
+  const [ejemplos, setEjemplos] = useState<Ejemplo[]>([]);
+  const [path, setPath] = useState("");
+  const [d, setD] = useState<DatosCaras | null>(null);
+  const [error, setError] = useState("");
+  const cargarEjemplos = () => pedir<{ ids: Ejemplo[] }>("/api/explica/caras-ejemplos?n=11").then((x) => { setEjemplos(x.ids); if (!path) setPath(x.ids[0]?.id ?? ""); });
+  useEffect(() => { void cargarEjemplos(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!path) return;
+    setD(null); setError("");
+    pedir<DatosCaras>(`/api/explica/caras?path=${encodeURIComponent(path)}`).then(setD).catch((e: Error) => setError(e.message));
+  }, [path]);
+  const W = 1000, H = 420;
+  const X = (x: number) => 20 + x * (W - 40), Y = (y: number) => 20 + (1 - y) * (H - 40);
+  return (
+    <section className={styles.seccion} id="caras">
+      <h2><b>4</b> Caras: un descriptor global</h2>
+      <p className={styles.bajada}>Para las caras no hay puntos clave ni palabras: una red neuronal (la ResNet de dlib, vía <code>face_recognition</code>, como en el Lab 11) mira la cara entera y la resume en <b>un solo vector de 128 números</b>. Es un <i>descriptor global</i>: una cara = un vector. Hay {r ? n(r.caras) : "8 937"} caras de {r ? n(r.personas) : "2 693"} artistas e integrantes, y esos vectores van directo al HNSW con distancia euclidiana. Elige una cara.</p>
+      <Selector ejemplos={ejemplos} elegido={path} onElegir={setPath} onMas={cargarEjemplos} />
+      {error && <p className={styles.error}>{error}</p>}
+      {d && <>
+        <div className={styles.dosColumnas}>
+          <div>
+            <div className={styles.imagenPuntos}>
+              <img src={media(d.path)} alt={d.nombre} />
+              <svg viewBox={`0 0 ${d.ancho} ${d.alto}`}>
+                <rect x={d.caja[3]} y={d.caja[0]} width={d.caja[1] - d.caja[3]} height={d.caja[2] - d.caja[0]} fill="none" stroke="var(--amber)" strokeWidth={3} vectorEffect="non-scaling-stroke" />
+                {Object.entries(d.puntos).map(([parte, pts]) => <g key={parte}>
+                  <polyline points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke="#3cb44b" strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+                  {pts.map((q, i) => <circle key={i} cx={q[0]} cy={q[1]} r={Math.max(1.5, d.ancho / 300)} fill="#e6194b" />)}
+                </g>)}
+              </svg>
+            </div>
+            <p className={styles.nota}>{d.nombre}. Recuadro: la cara detectada (HOG). Puntos rojos y líneas verdes: los 68 puntos de referencia (cejas, ojos, nariz, boca y mentón).</p>
+          </div>
+          <div className={styles.pasos}>
+            <div className={styles.paso}><span>Paso 1 · encontrar la cara</span>
+              <p>Un detector (HOG: histogramas de la dirección de los bordes, parecido a la idea de SIFT) encuentra el recuadro de la cara. Después ubica <b>68 puntos de referencia</b> y gira y escala la cara para que los ojos y la boca queden siempre en el mismo lugar.</p></div>
+            <div className={styles.paso}><span>Paso 2 · 128 números</span>
+              <p>La cara alineada pasa por una red neuronal entrenada para que las fotos de una misma persona den vectores cercanos y las de personas distintas, lejanos. Sale un vector de <b>128 números</b>. No hay histograma ni codebook: el vector ya es la "huella" de la cara.</p>
+              <Barras valores={d.embedding} color="#4363d8" alto={80} etiqueta="los 128 números de esta cara" /></div>
+            <div className={styles.paso}><span>Paso 3 · ¿misma persona?</span>
+              <p>Dos caras son de la misma persona si la <b>distancia euclidiana</b> entre sus vectores es chica. face_recognition propone 0.6; con tantos artistas usamos <b>{d.umbral}</b>, que se equivoca menos (ver el histograma de abajo).</p></div>
+          </div>
+        </div>
+
+        <div className={styles.bloque}>
+          <h3>La distancia de esta cara a las {n(d.total)} caras</h3>
+          <p className={styles.bajada}>En verde, sus otras {d.n_misma} fotos (la misma persona); en gris, las {n(d.n_otras)} caras de otras personas. Las líneas son los umbrales. Lo que queda a la izquierda del umbral se considera "la misma persona".</p>
+          <HistogramaDistancias d={d} />
+        </div>
+
+        <div className={styles.bloque}>
+          <h3>El mapa de las caras en 2D</h3>
+          <p className={styles.bajada}>Los vectores de 128 números aplastados a 2D con PCA (una de cada tres caras). En azul las fotos de {d.nombre}, la ★ es la elegida y los círculos verdes, los vecinos que encontró el HNSW. Igual que antes, el plano pierde información: cerca en 2D no siempre es cerca en 128D.</p>
+          <svg className={styles.plano} viewBox={`0 0 ${W} ${H}`}>
+            {d.mapa.map(([x, y], i) => <circle key={i} cx={X(x)} cy={Y(y)} r={1.8} fill="rgba(29,39,40,.18)" />)}
+            {d.vecinos.map((v, i) => <circle key={`v${i}`} cx={X(v.xy[0])} cy={Y(v.xy[1])} r={7} fill="none" stroke="var(--green)" strokeWidth={2.5} />)}
+            {d.mapa_persona.map(([x, y], i) => <circle key={`p${i}`} cx={X(x)} cy={Y(y)} r={5.5} fill="#4363d8" stroke="#fff" strokeWidth={1} />)}
+            <path d={estrella(X(d.mapa_yo[0]), Y(d.mapa_yo[1]), 12)} fill="#f1c40f" stroke="#1d2728" strokeWidth={2} />
+          </svg>
+        </div>
+
+        <div className={styles.bloque}>
+          <h3>Los 10 más parecidos según el HNSW</h3>
+          <p className={styles.bajada}>El HNSW revisó <b>{n(d.revisados)}</b> de {n(d.total)} caras (sin contar esta misma foto). Las tarjetas son el recorte de la cara con la que se calculó cada vector.</p>
+          <div className={styles.vecinosCaras}>
+            <figure className={styles.caraConsulta}><img src={recorte(d.path)} alt="" /><figcaption>★ {d.nombre}</figcaption></figure>
+            {d.vecinos.map((v, i) => <figure key={i} className={v.nombre === d.nombre ? styles.caraMisma : ""}><img src={recorte(v.foto)} alt="" /><figcaption>{i + 1}. {v.nombre}<br /><b>{v.distancia.toFixed(3)}</b> {v.misma_persona ? "· misma persona" : ""}</figcaption></figure>)}
+          </div>
+          {d.otras_fotos.length > 0 && <p className={styles.nota}>Borde azul: es la misma persona en otra foto. Si una foto suya queda por encima de {d.umbral}, la app diría "se parece" en vez de "misma persona": las fotos con otra luz, ángulo o edad cambian el vector.</p>}
+        </div>
+      </>}
+    </section>
+  );
+}
+
+function HistogramaDistancias({ d }: { d: DatosCaras }) {
+  // dos histogramas en el mismo eje: la misma persona (escala propia, son pocas) y las demás
+  const W = 1000, H = 220, n0 = d.hist_otras.length;
+  const maxO = Math.max(...d.hist_otras, 1), maxM = Math.max(...d.hist_misma, 1);
+  const X = (v: number) => 40 + (v / 1.2) * (W - 60);
+  const ancho = (W - 60) / n0;
+  return (
+    <svg className={styles.plano} viewBox={`0 0 ${W} ${H + 30}`}>
+      {d.hist_otras.map((c, i) => <rect key={i} x={X(d.bordes[i])} y={H - (c / maxO) * (H - 20)} width={ancho * 0.9} height={(c / maxO) * (H - 20)} fill="rgba(91,107,140,.35)" />)}
+      {d.hist_misma.map((c, i) => c ? <rect key={`m${i}`} x={X(d.bordes[i])} y={H - (c / maxM) * (H - 20)} width={ancho * 0.9} height={(c / maxM) * (H - 20)} fill="var(--green)" opacity={0.85} /> : null)}
+      {[[d.umbral, `nuestro umbral ${d.umbral}`], [0.6, "face_recognition 0.6"]].map(([u, t]) => <g key={String(t)}>
+        <line x1={X(Number(u))} x2={X(Number(u))} y1={8} y2={H} stroke={Number(u) === d.umbral ? "#c0392b" : "#1d2728"} strokeWidth={2} strokeDasharray={Number(u) === d.umbral ? "0" : "5 4"} />
+        <text x={Number(u) === d.umbral ? X(Number(u)) - 6 : X(Number(u)) + 6} y={20} fontSize="13" textAnchor={Number(u) === d.umbral ? "end" : "start"} fill={Number(u) === d.umbral ? "#c0392b" : "#1d2728"}>{t}</text>
+      </g>)}
+      <line x1={40} x2={W - 20} y1={H} y2={H} stroke="var(--line)" />
+      {[0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2].map((v) => <text key={v} x={X(v)} y={H + 18} fontSize="12" fill="var(--muted)" textAnchor="middle">{v.toFixed(1)}</text>)}
+    </svg>
+  );
+}
+
 function estrella(cx: number, cy: number, r: number) {
   const p = Array.from({ length: 10 }, (_, i) => { const a = (Math.PI / 5) * i - Math.PI / 2, rr = i % 2 ? r * 0.45 : r; return `${cx + Math.cos(a) * rr},${cy + Math.sin(a) * rr}`; });
   return `M${p.join("L")}Z`;
@@ -524,7 +625,7 @@ function ir(id: string) {
   el.classList.add(styles.destello);
 }
 
-function Caja({ id, titulo, detalle, tipo }: { id: string; titulo: string; detalle: string; tipo?: "imagen" | "audio" | "indice" }) {
+function Caja({ id, titulo, detalle, tipo }: { id: string; titulo: string; detalle: string; tipo?: "imagen" | "audio" | "indice" | "cara" }) {
   return <button className={`${styles.caja} ${tipo ? styles[`caja_${tipo}`] : ""}`} onClick={() => ir(id)} title="ir a esta parte">
     <b>{titulo}</b><span>{detalle}</span>
   </button>;
@@ -539,6 +640,7 @@ function Flujo() {
       <div className={styles.rama}>
         <Caja id="dog" tipo="imagen" titulo="imagen → SIFT" detalle="puntos clave (DoG) · 128 números c/u" />
         <Caja id="mfcc" tipo="audio" titulo="audio → MFCC" detalle="ventanas de 93 ms · 39 números c/u" />
+        <Caja id="caras" tipo="cara" titulo="cara → 128 números" detalle="descriptor global: va directo al índice" />
       </div>
       <span className={styles.flecha}>→</span>
       <Caja id="palabras" titulo="palabra más cercana" detalle="codebook K-Means de 1 024" />
@@ -564,7 +666,7 @@ export default function ComoFunciona() {
     <div className={styles.pagina}>
       <header className={styles.cabecera}>
         <div><span className={styles.ceja}>CHUTA DB · PARTE 4</span><h1>Cómo funciona la búsqueda por imagen y audio</h1></div>
-        <nav><a href="/">Consola técnica</a><a href="/musica">chuta music ▸</a></nav>
+        <nav><a href="/">Consola técnica</a><a href="/musica">chuta app ▸</a></nav>
       </header>
       {r && <div className={styles.numeros}>
         <div><b>{n(r.portadas)}</b><span>portadas</span></div>
@@ -579,7 +681,7 @@ export default function ComoFunciona() {
       <SeccionSift r={r} />
       <SeccionMfcc r={r} />
       <SeccionIndices r={r} />
-      <p className={styles.proximamente}>Próximamente en esta página: el reconocimiento de caras.</p>
+      <SeccionCaras r={r} />
     </div>
   );
 }

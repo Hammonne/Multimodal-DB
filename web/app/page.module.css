@@ -86,3 +86,6 @@
 .paginador { justify-content: center; margin: 4px 0 16px; }
 .paginador button { min-width: 38px; height: 32px; border: 1px solid var(--line); background: rgba(255,255,255,.35); font-size: 18px; line-height: 1; }
 .paginador button:hover:not(:disabled) { border-color: var(--amber); background: var(--amber-soft); }
+/* separación entre el botón de la app y el indicador de storage */
+.status { margin-left: 22px; }
+.viewTab, .viewTabActive, .status, .appButton { white-space: nowrap; }

@@ -131,12 +131,19 @@ Una página que explica el pipeline de la Parte 4 paso a paso **calculado en viv
   histograma TF y TF-IDF de la portada
 - **MFCC:** eliges una canción y la escuchas mientras ves la onda, el espectrograma, las 40 bandas mel, los
   39 coeficientes de cada ventana, su palabra de audio y el histograma
-- Falta (para seguir): IVF, HNSW y reconocimiento de caras
+- **DoG:** las gaussianas y sus diferencias, con los extremos de donde salen los puntos clave
+- **Bolsa de palabras en 2D:** los descriptores proyectados con PCA, en una versión simple de 12 palabras y
+  con el codebook real de 1 024
+- **IVF:** 2 000 portadas en 2D pintadas por celda, con un control de `nprobe`; **HNSW:** los niveles apilados
+  y la búsqueda animada paso a paso
+- **Caras:** detección con los 68 puntos, el embedding de 128 números, el histograma de distancias (misma
+  persona contra las demás, con los umbrales 0.45 y 0.6), el mapa 2D y los 10 vecinos del HNSW
+- Arriba, un diagrama de flujo del pipeline: cada caja lleva a su explicación
 
 ### La app (`/musica`)
 
 Además de la consola técnica hay una **app** para usar la base como un reproductor de música:
-`http://localhost:3000/musica`, o el botón **chuta music** de la consola.
+`http://localhost:3000/musica`, o el botón **chuta app** de la consola.
 
 | Pantalla | Qué hace | Qué usa por dentro |
 |---|---|---|

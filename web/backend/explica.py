@@ -324,3 +324,92 @@ def palabras2d(path: str) -> dict[str, Any]:
     return {"fondo": e["fondo"], "centroides": e["centroides"],
             "portada": [[round(float(x), 4), round(float(y), 4), int(p)] for (x, y), p in zip(P, pal)],
             "varianza": [round(float(v), 3) for v in e["pca"].explained_variance_ratio_]}
+
+
+# caras: descriptor global, un vector de 128 por cara (face_recognition, como en el lab 11)
+
+def _caras() -> dict[str, Any]:
+    if "caras" not in _cache:
+        from sklearn.decomposition import PCA
+        from multimedia import caras as C
+        datos, indice = C.abrir(str(DATA))
+        cajas = {}
+        for archivo in ("artist_faces.csv", "member_faces.csv"):
+            with (DATA / archivo).open(newline="", encoding="utf-8") as fh:
+                for r in csv.DictReader(fh):
+                    if r.get("kind") == "cara" and r.get("face_box"):
+                        cajas[r["path"]] = [int(v) for v in r["face_box"].split()]
+        E = datos["embedding"]
+        xy = PCA(2, random_state=0).fit_transform(E)
+        lo, hi = np.percentile(xy, 1, axis=0), np.percentile(xy, 99, axis=0)
+        dueno = np.array([f"{a}:{b}" for a, b in zip(datos["kind"], datos["owner_id"])])
+        _cache["caras"] = {"datos": datos, "indice": indice, "cajas": cajas, "dueno": dueno,
+                           "xy": np.clip((xy - lo) / (hi - lo), 0, 1), "umbral": C.UMBRAL}
+    return _cache["caras"]
+
+
+def caras_ejemplos(n: int = 12) -> list[dict[str, str]]:
+    # fotos de personas con 3 caras o más, así se ve que sus otras fotos quedan cerca
+    c = _caras()
+    _, inversa, cuenta = np.unique(c["dueno"], return_inverse=True, return_counts=True)
+    candidatas = np.flatnonzero(cuenta[inversa] >= 3)
+    elegidas = np.random.default_rng().choice(candidatas, min(n * 3, len(candidatas)), replace=False)
+    vistos, salida = set(), []
+    for i in elegidas:
+        if c["dueno"][i] in vistos:
+            continue
+        vistos.add(c["dueno"][i])
+        salida.append({"id": str(c["datos"]["path"][i]), "imagen": str(c["datos"]["path"][i]),
+                       "titulo": str(c["datos"]["name"][i])})
+        if len(salida) == n:
+            break
+    return salida
+
+
+def caras(path: str) -> dict[str, Any]:
+    from multimedia import caras as C
+    c = _caras()
+    datos = c["datos"]
+    pos = np.flatnonzero(datos["path"] == path)
+    if not len(pos) or path not in c["cajas"]:
+        raise ValueError("elige una foto de cara de la colección")
+    i = int(pos[0])
+    emb = datos["embedding"][i]
+    top, right, bottom, left = c["cajas"][path]
+    puntos = {}
+    try:
+        # los 68 puntos de referencia con los que face_recognition alinea la cara antes de la red
+        import face_recognition
+        img = face_recognition.load_image_file(str(DATA / path))
+        marcas = face_recognition.face_landmarks(img, [(top, right, bottom, left)])
+        if marcas:
+            puntos = {k: [[int(x), int(y)] for x, y in v] for k, v in marcas[0].items()}
+        alto, ancho = img.shape[:2]
+    except Exception:
+        g = cv2.imread(str(DATA / path))
+        alto, ancho = g.shape[:2]
+    # distancia a todas las caras: la misma persona contra las demás
+    d = np.linalg.norm(datos["embedding"] - emb, axis=1)
+    misma = c["dueno"] == c["dueno"][i]
+    misma[i] = False
+    otras = ~(c["dueno"] == c["dueno"][i])
+    bordes = np.linspace(0, 1.2, 61)
+    hist_misma = np.histogram(d[misma], bordes)[0]
+    hist_otras = np.histogram(d[otras], bordes)[0]
+    # se busca en el hnsw y se descarta solo esta misma foto: las otras fotos de la persona sí cuentan
+    pos_v, dist_v = c["indice"].buscar(emb, 60, 100)
+    quedan = [(p, dd) for p, dd in zip(pos_v, dist_v) if int(p) != i]
+    vecinos = C.personas(datos, [p for p, _ in quedan], [dd for _, dd in quedan], 10)
+    return {"path": path, "nombre": str(datos["name"][i]), "ancho": int(ancho), "alto": int(alto),
+            "caja": [top, right, bottom, left], "puntos": puntos, "embedding": emb.round(4).tolist(),
+            "bordes": bordes.round(2).tolist(), "hist_misma": hist_misma.tolist(), "hist_otras": hist_otras.tolist(),
+            "n_misma": int(misma.sum()), "n_otras": int(otras.sum()), "umbral": c["umbral"],
+            "otras_fotos": [str(p) for p in datos["path"][misma][:8]],
+            "mapa": [[round(float(x), 4), round(float(y), 4)] for x, y in c["xy"][::3]],
+            "mapa_persona": [[round(float(x), 4), round(float(y), 4)] for x, y in c["xy"][misma | (np.arange(len(d)) == i)]],
+            "mapa_yo": c["xy"][i].round(4).tolist(),
+            "vecinos": [{"nombre": v["nombre"], "foto": v["foto"], "distancia": round(v["distancia"], 3),
+                         "misma_persona": v["misma_persona"],
+                         "xy": c["xy"][int(np.flatnonzero(datos["path"] == v["foto"])[0])].round(4).tolist()}
+                        for v in vecinos],
+            "revisados": int(c["indice"].candidatos), "total": int(len(d))}

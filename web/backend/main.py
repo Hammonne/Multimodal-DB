@@ -520,6 +520,18 @@ def explica_hnsw(consulta: int = 0) -> dict[str, Any]:
     return _app(explica.hnsw, consulta)
 
 
+@app.get("/api/explica/caras-ejemplos")
+def explica_caras_ejemplos(n: int = 12) -> dict[str, Any]:
+    from web.backend import explica
+    return {"ids": _app(explica.caras_ejemplos, max(1, min(n, 30)))}
+
+
+@app.get("/api/explica/caras")
+def explica_caras(path: str) -> dict[str, Any]:
+    from web.backend import explica
+    return _app(explica.caras, path)
+
+
 @app.get("/api/app/actividad")
 def app_actividad(limite: int = 100) -> dict[str, Any]:
     return {"actividad": catalogo.actividad(limite)}
