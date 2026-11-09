@@ -153,6 +153,7 @@ function MultimediaSearchPanel() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [examples, setExamples] = useState<string[]>([]);
+  const [consultasEjemplo, setConsultasEjemplo] = useState<{ path: string; etiqueta: string; original: string }[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,6 +165,21 @@ function MultimediaSearchPanel() {
       .catch(() => { if (!cancelled) setExamples([]); });
     return () => { cancelled = true; };
   }, [kind]);
+
+  useEffect(() => {
+    fetch(`${API}/api/multimedia/consultas-ejemplo`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data: { consultas?: { path: string; etiqueta: string; original: string }[] } | null) => setConsultasEjemplo(data?.consultas ?? []))
+      .catch(() => setConsultasEjemplo([]));
+  }, []);
+
+  async function usarEjemplo(path: string) {
+    // se baja la imagen y se usa como si el usuario la hubiera subido
+    const response = await fetch(`${API}/api/multimedia/assets/${path}`);
+    if (!response.ok) { setMessage("No se pudo cargar el ejemplo"); return; }
+    const blob = await response.blob();
+    elegirArchivo(new File([blob], path.split("/").pop() ?? "consulta.jpg", { type: blob.type || "image/jpeg" }));
+  }
 
   useEffect(() => {
     if (!file) { setFilePreview(""); return; }
@@ -210,6 +226,15 @@ function MultimediaSearchPanel() {
           <label className={styles.eyebrow} htmlFor="multimedia-file">TU CONSULTA</label>
           <p className={styles.helpText}>Sube una foto de una portada (por ejemplo una foto del CD con el celular) o un fragmento de audio. Se le sacan los descriptores con el mismo codebook de la colección.</p>
           <input id="multimedia-file" className={styles.fileInput} type="file" accept="image/*,audio/*" onChange={(event) => elegirArchivo(event.target.files?.[0] ?? null)} />
+          {consultasEjemplo.length > 0 && <>
+          <p className={styles.helpText}>O prueba con un ejemplo: fotos reales de CDs y vinilos (Discogs) y una portada con distintos cambios.</p>
+          <div className={styles.exampleChoices}>
+            {consultasEjemplo.map((c) => <div key={c.path} role="button" tabIndex={0} className={file?.name === c.path.split("/").pop() ? styles.exampleChoiceActive : styles.exampleChoice} onClick={() => usarEjemplo(c.path)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") usarEjemplo(c.path); }}>
+              <img className={styles.exampleThumbnail} src={`${API}/api/multimedia/assets/${c.path}`} alt={c.etiqueta} loading="lazy" />
+              <span>{c.etiqueta}</span>
+            </div>)}
+          </div>
+          </>}
           {file && filePreview && <div className={styles.filePreview}>{file.type.startsWith("audio") ? <audio controls src={filePreview} /> : <img src={filePreview} alt="consulta subida" />}<span>{file.name}</span></div>}
           </> : <>
           <label className={styles.eyebrow} htmlFor="multimedia-query">ELIGE UN OBJETO</label>

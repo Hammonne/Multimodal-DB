@@ -99,7 +99,9 @@ Comparamos la búsqueda lineal (revisar toda la base) contra IVF y HNSW, de 1 00
 - **Coseno le gana a la euclidiana** sobre vectores sin normalizar: con euclidiana el recall cae a 0.80
 
 También probamos consultas como las de una app real. Con **250 fotos reales de CDs y vinilos**
-bajadas de Discogs, el 70 % encuentra su portada digital en el top 10 (casi siempre primera). Un
+bajadas de Discogs, el 70 % encuentra su portada digital en el top 10 (casi siempre primera). Con data
+augmentation, rotar, pasar a blanco y negro o cambiar los colores casi no afecta (0.99–1.00), porque SIFT
+trabaja en gris y es invariante a la rotación. Un
 fragmento de audio grabado con celular, en cambio, no acierta nunca, porque MFCC no aguanta que se
 pierdan frecuencias (para eso está el prototipo de Shazam de la Parte 5). El análisis completo, con galerías de aciertos y errores y la
 comparación con Faiss y hnswlib, está en
@@ -118,7 +120,8 @@ O con Docker: `docker compose up -d --build` (monta `data/` dentro del contenedo
 código hay que volver a correrlo con `--build`, porque la imagen copia el código al construirse.
 
 En la pestaña **Multimedia** de la web se busca con un objeto de la base o **subiendo una imagen o un
-audio propio** (por ejemplo una foto del CD), con el top-k que se quiera (1–100). Los índices de la web
+audio propio** (por ejemplo una foto del CD), con el top-k que se quiera (1–100). Ahí mismo hay
+ejemplos listos para probar con un clic: fotos reales de Discogs y una portada con los 8 cambios. Los índices de la web
 se guardan en `data/features/indices_web/` la primera vez (el HNSW de 20k portadas tarda ~3 min en
 armarse) y al arrancar se cargan de fondo, así que las búsquedas siguientes tardan milisegundos.
 

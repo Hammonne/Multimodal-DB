@@ -394,6 +394,31 @@ def search_multimedia_file(request: MultimediaFileSearchRequest) -> dict[str, An
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.get("/api/multimedia/consultas-ejemplo")
+def multimedia_consultas_ejemplo() -> dict[str, Any]:
+    # fotos reales de discogs y portadas modificadas (data augmentation) para probar "subir archivo"
+    data = ROOT / "data"
+    salida = []
+
+    def filas(nombre: str) -> list[dict[str, str]]:
+        ruta = data / nombre
+        if not ruta.is_file():
+            return []
+        with ruta.open(newline="", encoding="utf-8") as fh:
+            return list(csv.DictReader(fh))
+
+    reales = [f for f in filas("fotos_reales.csv") if f.get("tipo") == "principal"]
+    for f in reales[:6]:
+        salida.append({"path": f["path"], "etiqueta": f"foto real ({f['formato']})", "original": f["cover_path"]})
+    aumentadas = filas("consultas_aumentadas.csv")
+    if aumentadas:
+        primera = aumentadas[0]["album_id"]
+        for f in aumentadas:
+            if f["album_id"] == primera:
+                salida.append({"path": f["path"], "etiqueta": f["cambio"], "original": f["original"]})
+    return {"consultas": salida}
+
+
 @app.get("/api/multimedia/examples")
 def multimedia_examples(kind: str = "sift") -> dict[str, Any]:
     try:
