@@ -26,7 +26,7 @@
 | 📝 | **Texto** | buscar canciones por lo que dice su letra (integrándose al SQL) | índice invertido SPIMI con TF-IDF y BM25 |
 | 🖼️ | **Imágenes** | `WHERE SIMILAR_TO('portada.jpg', k=10) USING HNSW` | SIFT + bag of visual words + IVF / HNSW |
 | 🎧 | **Audio** | `WHERE SIMILAR_TO('fragmento.mp3', k=5) USING IVF` | MFCC + bag of audio words + IVF / HNSW |
-| 🧑‍🎤 | **Caras** | `python -m multimedia.caras foto.jpg`: qué artistas se parecen | embedding global de 128 dims (`face_recognition`) + HNSW |
+| 🧑‍🎤 | **Caras** | en la app, reconocer una cara con la cámara en vivo, o `python -m multimedia.caras foto.jpg` | embedding global de 128 dims (`face_recognition`) + HNSW |
 
 Y debajo de todo eso, un motor de verdad: páginas de 4 KB, buffer pool con clock-sweep, catálogo en
 disco, transacciones con WAL, undo/redo, locks y `EXPLAIN ANALYZE` al estilo PostgreSQL.
@@ -152,13 +152,17 @@ Además de la consola técnica hay una **app** para usar la base como un reprodu
 | Álbum | canciones con su preview, **fotos del CD o vinilo** y **portadas parecidas** | HNSW con SIFT + TF-IDF |
 | Canción | reproductor, letra que se pinta mientras suena y **"suena parecido"** | HNSW con MFCC + TF-IDF |
 | Buscar | aún no implementado (la búsqueda por texto es la Parte 3) | — |
-| Reconocer | subes la foto de un CD o un audio y dice qué álbum o canción es | HNSW con SIFT o MFCC |
+| Reconocer | **portada o cara**, desde una foto subida, la **cámara** o **en vivo** (un cuadro por segundo, con recuadros sobre las caras como en el Lab 11): el más parecido en grande, el top k con distancias y otras fotos de esa persona; "Detener" congela el cuadro | HNSW con SIFT, MFCC o embeddings de cara |
 
 - El catálogo sale de los CSV porque solo se muestra; todas las búsquedas usan nuestros índices
   (`web/backend/app_catalogo.py`)
 - **Cada búsqueda queda registrada** en `data/app_log.jsonl`: qué índice usó, la métrica, cuántos
   vectores revisó de cuántos, cuánto tardó y la consulta SQL equivalente. La consola lo muestra en vivo
   en la pestaña **Actividad de la app**, y en la app el botón "Ver cómo funciona" explica cada búsqueda
+- **Cuántos parecidos mostrar:** todas las búsquedas muestran los 10 más parecidos por defecto; el 10 de cada
+  título ("los **10** álbumes más parecidos") se puede cambiar de 1 a 50 y vale para toda la app
+- Las caras se muestran con el **recorte de la cara** que usó face_recognition (no la foto de perfil), y el
+  Docker del backend instala `face_recognition` con `dlib-bin` (dlib ya compilado)
 - Cada pantalla tiene su dirección (`/musica?artista=182`, `/musica?album=545417912`, `/musica?reconocer`),
   así se puede recargar o compartir
 - **Letra pintada:** no sabemos en qué segundo de la canción empieza cada preview de 30 s de Deezer

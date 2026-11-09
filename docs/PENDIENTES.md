@@ -28,15 +28,19 @@ el 70 % encuentra la portada digital en el top 10. Se podría:
 
 ## Búsqueda por cara de artista (extra)
 
-Ya funciona por consola: `python -m multimedia.caras foto.jpg` mete los embeddings de 128 dimensiones
-de `data/features/faces.npz` en nuestro HNSW con euclidiana y devuelve los artistas más parecidos
-(resultados y por qué el umbral es 0.45 en `multimedia/README.md`). Falta:
+Ya está en la web: en la app (`/musica` → Reconocer → Cara) se reconoce desde una foto, la cámara o en vivo,
+con el top k del HNSW, y en la página de cada artista sale "los artistas que más se parecen". El Docker del
+backend instala `face_recognition` con `dlib-bin`. Queda opcional:
 
-- Mostrarla en la web: un endpoint que reciba la foto, llame a `multimedia.caras.buscar_foto` y
-  devuelva nombre, foto y distancia
-- Opcional: llevarla al SQL, por ejemplo con `SIMILAR_TO` sobre una columna de fotos de caras
-- `face_recognition` (dlib) no está en `web/backend/requirements.txt`; habría que agregarlo a la
-  imagen de Docker
+- Llevarla al SQL, por ejemplo con `SIMILAR_TO` sobre una columna de fotos de caras
+- Medir el umbral con más personas: con ~2 700, 0.45 acierta 90 % de las veces que responde
+  (`python -m multimedia.caras --evaluar`)
+
+## ¿Codebook de 2048 palabras? (experimento para la Parte 5)
+
+Hoy K = 1024 (`codebook-k-finding.ipynb`). Con 2048 el recall de las consultas modificadas sube (portada en
+jpeg chico .45 → .59, audio de 5 s .88 → .94) pero cada consulta tarda el doble (2.0 → 3.8 ms en portadas).
+Cambiarlo obliga a rehacer el codebook, los vectores, los índices, el benchmark y las colecciones de la web.
 
 ## Shazam y "cantas y reconoce" (Parte 5)
 

@@ -294,6 +294,9 @@ La mediana de la distancia es 0.39 cuando acierta y 0.46 cuando se equivoca. Se 
 
 Con ~9 000 caras de 128 dimensiones la lineal es rápida (2 ms), así que el HNSW gana poco; la diferencia crecería con más artistas.
 
+En la web se usa en la app (`/musica` → Reconocer → Cara, también con la cámara en vivo) y en la página
+`/como-funciona`, que muestra la detección con los 68 puntos, el embedding y el histograma de distancias.
+
 ## Referencias
 
 - Lowe, D. G. (2004). Distinctive image features from scale-invariant keypoints. *International Journal of Computer Vision*, 60(2), 91–110. (SIFT)
