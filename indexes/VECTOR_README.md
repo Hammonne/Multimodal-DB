@@ -168,6 +168,26 @@ imágenes o audios crea un `VectorSecondaryIndex`, igual que el R-Tree se cuelga
   la tabla cambió con el índice cerrado, se reconstruye
 - Parámetros: IVF con nlist = 100 (o N si hay menos filas) y nprobe = 10; HNSW con M = 16, ef_construction = 100 y ef_search = 50
 
+### Columnas `IMAGE` y `AUDIO`: un modelo por índice
+
+Si la columna es `IMAGE` o `AUDIO` (y no un `VARCHAR`), el índice no usa el codebook de nuestro dataset:
+entrena uno propio con los archivos de la tabla (`storage/modelo_multimedia.py`). Así el motor sirve
+para cualquier colección:
+
+1. Al crear el índice se sacan los descriptores de cada archivo (SIFT o MFCC según el tipo de columna)
+2. K-Means (`MiniBatchKMeans`, muestra de hasta 200 000 descriptores) con **K = raíz del total de
+   descriptores, entre 8 y 1024**. Con 20 000 portadas da 1024, como el codebook general; con 100
+   fotos da ~200
+3. Se calcula el idf de la tabla y cada archivo pasa a un vector TF-IDF, que entra al IVF o al HNSW
+4. El modelo se guarda en `<índice>_modelo.npz` (centroides, media, desviación e idf). Los `INSERT`
+   siguientes y las consultas se vectorizan con ese modelo
+5. Si se crea el índice con la tabla vacía, las filas que llegan esperan y el modelo se entrena con
+   ellas en la primera consulta
+
+Sin índice, la búsqueda lineal sobre una columna `IMAGE`/`AUDIO` entrena el mismo modelo en el momento
+y lo deja en memoria mientras la tabla no cambie. Los descriptores de cada archivo se guardan en una
+caché, así la lineal, el IVF y el HNSW no los vuelven a calcular.
+
 La sintaxis SQL está en el [README principal](../README.md#sql-de-la-parte-4).
 
 ## Referencias

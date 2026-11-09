@@ -175,15 +175,57 @@ Pruebas: `python run_all_tests.py`.
 ### SQL de la Parte 4
 
 ```
+Tipo       ::= ... | IMAGE | AUDIO
+Import     ::= IMPORT INTO id FROM ( 'archivo.csv' | 'carpeta/' )
 SimilarTo  ::= SIMILAR_TO ( 'ruta' , [k =] num )
 UsingVec   ::= USING (IVF | HNSW) [WITH METRIC = (cosine | euclidean | dot)]
 Proj       ::= ... | SIMILARITY_SCORE ( ) [AS id]
 CreateIdx  ::= CREATE INDEX ON id ( columna ) USING (IVF | HNSW)
 ```
 
+**Con cualquier dataset: columnas `IMAGE` y `AUDIO`.** El motor no depende de nuestras canciones.
+Una columna `IMAGE` o `AUDIO` guarda la ruta del archivo, y el tipo le dice al motor si sacar SIFT o MFCC.
+Al crear el índice, **cada columna entrena su propio codebook e idf** con los archivos de esa tabla
+(`storage/modelo_multimedia.py`, K = raíz del total de descriptores, entre 8 y 1024). El modelo se guarda
+junto al índice (`<índice>_modelo.npz`) y los `INSERT` siguientes se vectorizan con él.
+
+```sql
+CREATE TABLE fotos (id INT PRIMARY KEY, nombre VARCHAR(60), foto IMAGE) USING HEAP;
+IMPORT INTO fotos FROM 'mis_fotos/';          -- una fila por imagen: id 1, 2, 3…, nombre = archivo
+CREATE INDEX ON fotos (foto) USING HNSW;      -- entrena el codebook con estas fotos
+
+SELECT nombre, SIMILARITY_SCORE() AS score FROM fotos
+    WHERE SIMILAR_TO('consulta.jpg', k=5) ORDER BY score DESC;
+```
+
+- **Carga:** `IMPORT INTO t FROM 'carpeta/'` mete una fila por imagen o audio. La primera columna `INT`
+  se numera y la primera `VARCHAR` recibe el nombre del archivo. Con un CSV, las rutas de las columnas
+  `IMAGE`/`AUDIO` pueden ser relativas al CSV o a `data/`. En la consola web también se puede subir un
+  `.zip` (solo imágenes, solo audios, o un CSV con sus archivos): se arma la tabla, se importa y se crea
+  un índice HNSW por cada columna multimedia
+- `IMAGE` y `AUDIO` no son palabras reservadas: una columna se puede seguir llamando `audio`
+- Las tablas con columnas multimedia siguen siendo tablas normales: `JOIN`, `GROUP BY`, índices B+,
+  `UPDATE` y `DELETE` funcionan igual (el parser no acepta alias de tabla: usar el nombre completo)
+- Sin índice, `SIMILAR_TO` sobre una columna `IMAGE`/`AUDIO` entrena el modelo en el momento y hace
+  búsqueda lineal (el modelo queda en memoria mientras la tabla no cambie)
+- Una columna `VARCHAR` con rutas sigue funcionando como antes, con el codebook de nuestro dataset
+  (`data/features/`)
+
+**Benchmark por SQL con tu propia carpeta**, de punta a punta por el motor: `CREATE TABLE`, `IMPORT`,
+`CREATE INDEX` y `SIMILAR_TO` con y sin índice:
+
+```bash
+python -m benchmark.multimedia.benchmark_sql --carpeta mis_fotos/ --tamanos 100 250 500 1000
+```
+
+Los resultados quedan en `benchmark/multimedia/sql/` (ver
+[benchmark por SQL](benchmark/multimedia/README.md#benchmark-por-sql-con-cualquier-carpeta)).
+
+**Detalles de `SIMILAR_TO`:**
+
 - La ruta de la consulta puede ser absoluta o relativa a `data/` y no tiene que estar en la tabla:
-  se le saca el vector con `ExtractFeatures`. La extensión dice si es imagen o audio
-- La columna indexada es un `VARCHAR` con rutas de imágenes o de audios (no mezcladas)
+  se le saca el vector con el mismo modelo de la columna. La extensión dice si es imagen o audio
+- La columna puede ser `IMAGE`, `AUDIO` o un `VARCHAR` con rutas de imágenes o de audios (no mezcladas)
 - Sin `USING` se usa el índice vectorial que tenga la tabla, y si no tiene, búsqueda lineal.
   Sin `WITH METRIC` se usa coseno
 - `SIMILARITY_SCORE()`: mayor = más parecido. Coseno y dot dan la similitud, euclidean da 1 / (1 + d)

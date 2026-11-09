@@ -203,6 +203,24 @@ recall@10 = la original sale entre las 10 primeras (búsqueda exacta por coseno)
 - 1024 es el punto medio: buen recall sin duplicar el tiempo por consulta. K también es la dimensión
   de los vectores que indexan IVF y HNSW
 
+### Codebook de otra colección (columnas `IMAGE` y `AUDIO`)
+
+El codebook de arriba está hecho con nuestras canciones. Para que el motor sirva con cualquier dataset,
+una columna `IMAGE` o `AUDIO` entrena el suyo con los archivos de su tabla, con
+`storage/modelo_multimedia.py` (`ModeloMultimedia`). Usa los mismos pasos (descriptores, K-Means, TF-IDF),
+pero elige K según el tamaño de la colección: **K = raíz del total de descriptores, entre 8 y 1024**.
+Una colección chica con K = 1024 dejaría casi todas las palabras vacías.
+
+```python
+from storage.modelo_multimedia import ModeloMultimedia
+m = ModeloMultimedia("sift").entrenar(rutas)    # "mfcc" para audios
+v = m.vector("consulta.jpg")                    # vector TF-IDF con el codebook de esa colección
+m.guardar("modelo.npz")
+```
+
+Desde SQL no hace falta llamarlo: lo usa `CREATE INDEX` sobre la columna (ver
+[`indexes/VECTOR_README.md`](../indexes/VECTOR_README.md#columnas-image-y-audio-un-modelo-por-índice)).
+
 ## 3. TF-IDF (`features.py`)
 
 ```

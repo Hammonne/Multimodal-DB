@@ -255,6 +255,58 @@ Arriba los aciertos, abajo los errores. Están las 8 combinaciones en `graficas/
 ![galería fotos simuladas](graficas/galeria_foto_simulada.jpg)
 ![galería audio](graficas/galeria_mfcc_hnsw_coseno.jpg)
 
+### Benchmark por SQL con cualquier carpeta
+
+Lo de arriba mide los índices directamente, con el codebook de nuestro dataset. Este benchmark mide
+**el motor completo por SQL**, con columnas `IMAGE` / `AUDIO` que entrenan su propio codebook, así que
+sirve con cualquier carpeta de imágenes o audios (`benchmark_sql.py`). Para cada tamaño, en una base nueva:
+
+1. `CREATE TABLE t (id INT PRIMARY KEY, nombre VARCHAR(80), archivo IMAGE)` (o `AUDIO`) e
+   `IMPORT INTO t FROM 'carpeta/'`
+2. Búsqueda lineal: la primera consulta entrena el modelo de la columna (se mide aparte) y después
+   `SIMILAR_TO(..., k=10)` sin índice da los 10 vecinos exactos
+3. `CREATE INDEX ... USING IVF` y `USING HNSW`: cada uno entrena su codebook con esos archivos; recall@10
+   contra la lineal
+
+```bash
+python -m benchmark.multimedia.benchmark_sql --carpeta mis_fotos/ --tamanos 100 250 500 1000
+python -m benchmark.multimedia.benchmark_sql --carpeta mis_audios/ --tamanos 50 100 200 300 --consultas 20
+```
+
+Lo corrimos con 1 000 portadas y 300 audios tomados al azar de `data/` (30 consultas por tamaño en imágenes
+y 20 en audios). Resultados en `sql/resultados_imagenes.json` y `sql/resultados_audios.json`:
+
+<p align="center">
+  <img src="sql/sql_imagenes.png" alt="benchmark por SQL, imágenes" width="800">
+  <img src="sql/sql_audios.png" alt="benchmark por SQL, audios" width="800">
+</p>
+
+| Imágenes | K | Lineal | IVF: crear / consulta / recall | HNSW: crear / consulta / recall |
+|---|---|---|---|---|
+| 100 | 212 | 2.1 ms | 3.3 s / 1.5 ms / 1.000 | 3.5 s / 1.0 ms / 1.000 |
+| 250 | 337 | 4.0 ms | 4.0 s / 1.4 ms / 0.900 | 5.0 s / 1.4 ms / 1.000 |
+| 500 | 475 | 8.7 ms | 7.0 s / 1.6 ms / 0.893 | 9.5 s / 1.7 ms / 1.000 |
+| 1 000 | 671 | 16.9 ms | 8.8 s / 1.9 ms / 0.883 | 14.4 s / 2.1 ms / 1.000 |
+
+| Audios | K | Lineal | IVF: crear / consulta / recall | HNSW: crear / consulta / recall |
+|---|---|---|---|---|
+| 50 | 254 | 1.3 ms | 1.0 s / 1.2 ms / 1.000 | 1.0 s / 1.0 ms / 1.000 |
+| 100 | 359 | 2.3 ms | 1.5 s / 1.8 ms / 1.000 | 1.8 s / 1.6 ms / 1.000 |
+| 200 | 508 | 4.2 ms | 2.8 s / 2.3 ms / 0.910 | 3.4 s / 2.5 ms / 1.000 |
+| 300 | 622 | 8.2 ms | 3.3 s / 2.9 ms / 0.915 | 4.6 s / 2.3 ms / 1.000 |
+
+- **Por SQL se ve lo mismo que midiendo los índices solos:** la lineal crece con N y los índices casi no.
+  Con 1 000 imágenes, el HNSW responde 8 veces más rápido que la lineal y con recall 1.0
+- **El IVF pierde recall** (~0.89) desde que hay más de 100 filas, porque con nprobe = 10 no revisa
+  todas las listas. El HNSW se mantiene en 1.0
+- **K crece con la colección** (raíz del total de descriptores): 212 palabras con 100 portadas,
+  671 con 1 000
+- **Construir el índice sale más barato que el "modelo de la lineal"**, pero solo porque la lineal corre
+  primero y saca los descriptores de todos los archivos (lo más caro, ~40 s con 1 000 imágenes). Los
+  índices los reusan de la caché y solo pagan K-Means y la estructura
+- En la primera corrida, el HNSW con 1 000 imágenes dio 10.4 ms por consulta, con otros procesos
+  usando la máquina. Repetido sin ellos dio 2.1 ms, que es lo que queda en la tabla
+
 ## Recomendación
 
 | Si… | Usar |
