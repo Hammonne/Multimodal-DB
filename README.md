@@ -26,6 +26,7 @@
 | 📝 | **Texto** | buscar canciones por lo que dice su letra (integrándose al SQL) | índice invertido SPIMI con TF-IDF y BM25 |
 | 🖼️ | **Imágenes** | `WHERE SIMILAR_TO('portada.jpg', k=10) USING HNSW` | SIFT + bag of visual words + IVF / HNSW |
 | 🎧 | **Audio** | `WHERE SIMILAR_TO('fragmento.mp3', k=5) USING IVF` | MFCC + bag of audio words + IVF / HNSW |
+| 🧑‍🎤 | **Caras** | `python -m multimedia.caras foto.jpg`: qué artistas se parecen | embedding global de 128 dims (`face_recognition`) + HNSW |
 
 Y debajo de todo eso, un motor de verdad: páginas de 4 KB, buffer pool con clock-sweep, catálogo en
 disco, transacciones con WAL, undo/redo, locks y `EXPLAIN ANALYZE` al estilo PostgreSQL.
@@ -40,7 +41,7 @@ disco, transacciones con WAL, undo/redo, locks y `EXPLAIN ANALYZE` al estilo Pos
 <td align="center"><h3>22 M</h3>descriptores SIFT y MFCC</td>
 </tr>
 <tr>
-<td align="center"><h3>1.8 ms</h3>por consulta con HNSW<br>(8 veces menos que revisar todo)</td>
+<td align="center"><h3>1.5 ms</h3>por consulta con HNSW<br>(9.5 veces menos que revisar todo)</td>
 <td align="center"><h3>0.98</h3>recall@10 con HNSW</td>
 <td align="center"><h3>8</h3>índices hechos a mano</td>
 <td align="center"><h3>0</h3>bases de datos por debajo</td>
@@ -78,7 +79,8 @@ palabra. Después cada objeto es un histograma de palabras, como un documento.
 
 ## Resultados
 
-Comparamos IVF contra HNSW y euclidiana contra coseno, de 1 000 a 19 800 portadas y 10 000 audios:
+Comparamos la búsqueda lineal (revisar toda la base) contra IVF y HNSW, de 1 000 a 19 800 portadas y
+10 000 audios:
 
 <p align="center">
   <img src="benchmark/multimedia/graficas/consulta_vs_n.png" alt="tiempo por consulta vs tamaño" width="800">
@@ -86,16 +88,20 @@ Comparamos IVF contra HNSW y euclidiana contra coseno, de 1 000 a 19 800 portada
 
 | Coseno, k = 10 | Construir (20k portadas) | Consulta | Recall@10 portadas | Recall@10 audio |
 |---|---|---|---|---|
-| Búsqueda lineal | — | 14 ms | 1.000 | 1.000 |
-| **IVF** | 10 s | 2.6 ms | 0.941 | 0.922 |
-| **HNSW** | 175 s | **1.8 ms** | **0.981** | **0.987** |
+| Búsqueda lineal | — | 14.4 ms | 1.000 | 1.000 |
+| **IVF** | 11 s | 2.6 ms | 0.941 | 0.922 |
+| **HNSW** | 174 s | **1.5 ms** | **0.981** | **0.987** |
 
-- **HNSW casi no se pone más lento al crecer**: con el doble de portadas sigue en ~2 ms, mientras la
-  búsqueda lineal se duplica
+- **Con índice, cada consulta es 4–10 veces más rápida que la búsqueda lineal**, y la ventaja crece
+  con N: con el doble de portadas HNSW sigue en ~1.5 ms mientras la lineal se duplica. Con menos de
+  ~2 500 objetos la lineal todavía gana
 - **IVF se construye 17 veces más rápido**, ideal si la colección cambia seguido
 - **Coseno le gana a la euclidiana** sobre vectores sin normalizar: con euclidiana el recall cae a 0.80
 
-El análisis completo, con galerías de aciertos y errores y la comparación con Faiss y hnswlib, está en
+También probamos consultas como las de una app real: una foto simulada de la portada (perspectiva,
+fondo, reflejo) acierta ~1 de cada 4, y un fragmento grabado con celular no acierta nunca, porque MFCC
+no aguanta que se pierdan frecuencias. El análisis completo, con galerías de aciertos y errores y la
+comparación con Faiss y hnswlib, está en
 [`benchmark/multimedia/`](benchmark/multimedia/README.md).
 
 ## Pruébalo
@@ -134,6 +140,7 @@ Pruebas: `python run_all_tests.py`.
 | Índices vectoriales: métricas, IVF, HNSW | [`indexes/VECTOR_README.md`](indexes/VECTOR_README.md) |
 | Benchmark multimedia | [`benchmark/multimedia/README.md`](benchmark/multimedia/README.md) |
 | Dataset: fuentes, cómo se descarga, columnas | [`data/README.md`](data/README.md) |
+| Lo que quedó pendiente y cómo seguir | [`docs/PENDIENTES.md`](docs/PENDIENTES.md) |
 
 ### Organización del código
 
@@ -201,7 +208,12 @@ python -m multimedia.features --tipo ambos --k 1024     # vectores TF-IDF de la 
 ### Ideas para la Parte 5
 
 1. **Shazam:** reconocer la canción grabando unos segundos aunque haya ruido, con *audio fingerprinting* (picos del espectrograma como huella de la grabación, como hace Shazam). Se puede hacer con `librosa` o ver `audfprint` / `dejavu`
-2. **Detector cantando:** que alguien cante o tararee y diga qué canción es o cuál se parece más, con *query by humming*. Se saca la melodía con `librosa.pyin` y se compara con DTW (`librosa.sequence.dtw`), porque MFCC ignora la melodía a propósito
+   - Hace falta: el benchmark muestra que con MFCC un fragmento grabado con celular no encuentra nunca la canción, porque el filtro del celular cambia la forma del espectro. Los picos del espectrograma sí sobreviven a eso (Wang, 2003)
+   - Encaja con lo que ya tenemos: cada par de picos se vuelve un hash y se busca en un índice invertido, como el SPIMI o el hash extensible del motor
+2. **Detector cantando (en investigación):** que alguien cante o tararee y diga qué canción es o cuál se parece más, con *query by humming*. MFCC no sirve porque ignora la melodía a propósito: hay que sacar la melodía (por ejemplo con `librosa.pyin`) y compararla sin que importe el tono ni la velocidad
+   - **Cuidado con DTW** (*Dynamic Time Warping*), que es lo primero que aparece al buscar. El profesor advirtió que **DTW no es una métrica**: no cumple la desigualdad triangular, así que no se puede meter tal cual en IVF, HNSW ni ningún índice que pode la búsqueda suponiendo una métrica, porque descartaría candidatos correctos. Además cuesta O(n·m) por comparación, y comparar contra toda la base una por una es lento
+   - Ideas por revisar: (a) filtrar primero con una cota inferior que sí se pueda indexar (LB_Keogh) y aplicar DTW solo a los pocos que quedan; (b) llevar la melodía a un vector de largo fijo (intervalos entre notas, invariante al tono) y usar coseno con los índices que ya existen; (c) n-gramas de intervalos en un índice invertido, como texto
+   - Otro problema: los previews de Deezer traen la mezcla completa (voz e instrumentos), así que primero habría que separar la voz (por ejemplo con `demucs`). Además, si el preview no incluye el coro, nadie lo va a cantar
 
 ### Referencias
 
