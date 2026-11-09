@@ -92,6 +92,11 @@ Comparamos la búsqueda lineal (revisar toda la base) contra IVF y HNSW, de 1 00
 | **IVF** | 11 s | 2.6 ms | 0.941 | 0.922 |
 | **HNSW** | 174 s | **1.5 ms** | **0.981** | **0.987** |
 
+<p align="center">
+  <img src="benchmark/multimedia/graficas/recall_vs_n.png" alt="recall@10 vs tamaño" width="800">
+</p>
+<p align="center"><sub>Recall@10: de los 10 vecinos exactos (búsqueda lineal), cuántos devuelve cada índice</sub></p>
+
 - **Con índice, cada consulta es 4–10 veces más rápida que la búsqueda lineal**, y la ventaja crece
   con N: con el doble de portadas HNSW sigue en ~1.5 ms mientras la lineal se duplica. Con menos de
   ~2 500 objetos la lineal todavía gana
