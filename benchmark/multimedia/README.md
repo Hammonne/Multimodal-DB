@@ -177,36 +177,43 @@ no el índice. Coseno encuentra mejor el original porque ignora el tamaño del v
 
 La foto simulada es una aproximación. Para probar con fotos de verdad, `scripts/fetch_fotos_reales.py`
 busca en **Discogs** la edición física (CD, vinilo o casete) de álbumes que ya están entre las 20 005
-portadas y baja las fotos que subió la gente (no necesita token). Probó 931 álbumes y 250 tenían edición
-física con fotos: 124 vinilos, 108 CDs y 18 casetes. La respuesta correcta es la portada digital de
-Deezer que ya está en la base. Se evalúa con `python -m benchmark.multimedia.fotos_reales` (vectores
-normalizados, coseno, búsqueda exacta; el HNSW da casi lo mismo, recall 0.98):
+portadas y baja las fotos que subió la gente (no necesita token): la portada del objeto, fotos extra y la
+portada de hasta 6 ediciones más. Probó 1 645 álbumes (primero 941 al azar y después los más escuchados) y
+**600** tenían edición física: 284 CDs, 262 vinilos y 54 casetes, **3 409 fotos** en total. La respuesta
+correcta es la portada digital de Deezer que ya está en la base. Se evalúa con
+`python -m benchmark.multimedia.fotos_reales` (vectores normalizados, coseno, búsqueda exacta; el HNSW da
+casi lo mismo, recall 0.98):
 
 | foto de Discogs | n | el original sale 1.° | en el top 10 |
 |---|---|---|---|
-| **portada del objeto físico** (foto principal) | 250 | **0.63** | **0.70** |
-| … casi idéntica a la digital (un escaneo limpio) | 33 | 0.97 | 1.00 |
-| … distinta (foto, otra luz, plástico, stickers) | 217 | 0.58 | 0.65 |
-| … de un CD | 108 | 0.69 | 0.73 |
-| … de un vinilo | 124 | 0.66 | 0.75 |
-| … de un casete | 18 | — | 0.11 |
-| fotos extra (contraportada, disco, librillo) | 409 | 0.04 | 0.04 |
+| **portada del objeto físico** (foto principal) | 600 | **0.59** | **0.66** |
+| … casi idéntica a la digital (un escaneo limpio) | 75 | 0.91 | 0.96 |
+| … distinta (foto, otra luz, plástico, stickers) | 525 | 0.55 | 0.62 |
+| … de un CD | 284 | 0.63 | 0.70 |
+| … de un vinilo | 262 | 0.63 | 0.71 |
+| … de un casete | 54 | 0.22 | 0.26 |
+| **portada de otra edición** del mismo álbum | 1 790 | 0.55 | 0.65 |
+| fotos extra (contraportada, disco, librillo) | 1 019 | 0.04 | 0.06 |
 
 "Casi idéntica" = correlación > 0.9 entre las dos imágenes en gris a 32 px.
 
 ![galería de fotos reales](graficas/galeria_fotos_reales.jpg)
 
-- **Las fotos reales salen mejor que la simulada** (0.65 contra 0.27 en el top 10): la simulación era
+- **Las fotos reales salen mejor que la simulada** (0.62 contra 0.27 en el top 10): la simulación era
   más dura que la realidad, con un fondo grande, un reflejo fuerte y mucha perspectiva. La gente suele
   sacar la foto de frente y llenando el cuadro
 - **Cuando la encuentra, casi siempre es la primera** (89 % de los aciertos en las fotos distintas)
+- **CDs y vinilos aciertan ~70 %; los casetes casi nunca** (26 %): la portada es chica, está detrás de una caja
+  de plástico y muchas veces la foto es de costado
+- Las portadas de otras ediciones aciertan casi igual que la foto principal (0.65): cuando la reedición usa el
+  mismo arte se encuentra, cuando cambia el diseño no
 - **Algunos errores no son del buscador:** la "foto principal" de Discogs a veces es el disco
   transparente, una portada de otra edición con otro diseño o, en los casetes, la caja de costado. Las
   fotos extra (contraportada, el disco) casi nunca aciertan porque no muestran la portada
 - Los errores de verdad son fotos con plástico brillante, stickers grandes o mucha sombra, que tapan
   los puntos SIFT
 
-Las fotos (76 MB) quedan en `data/fotos_reales/` con su lista en `data/fotos_reales.csv`; no se suben
+Las fotos (361 MB) quedan en `data/fotos_reales/` con su lista en `data/fotos_reales.csv`; no se suben
 al repo.
 
 ### Data augmentation: rotar, espejo, blanco y negro, otros colores…
@@ -296,7 +303,7 @@ El enunciado pide también 100 000 objetos. El dataset tiene 10 000 canciones y 
 - Nuevas consultas modificadas: foto simulada de la portada y fragmento grabado con celular, con su
   galería (`galeria_foto_simulada.jpg`)
 - Se volvió a correr todo con 19 800 portadas y 10 000 audios
-- Fotos reales de 250 CDs, vinilos y casetes bajadas de Discogs (`scripts/fetch_fotos_reales.py`) y
+- Fotos reales de 600 CDs, vinilos y casetes (3 409 fotos) bajadas de Discogs (`scripts/fetch_fotos_reales.py`) y
   evaluadas con `benchmark/multimedia/fotos_reales.py`
 - Data augmentation de 100 portadas sin foto real con 8 cambios (`benchmark/multimedia/aumentadas.py`)
 

@@ -54,6 +54,9 @@ def resumen(casos):
             "principal_distinta": tasa([c for c in p if c["parecido"] < .9]),
             "principal_cd": tasa([c for c in p if c["formato"] == "CD"]),
             "principal_vinilo": tasa([c for c in p if c["formato"] == "Vinyl"]),
+            "principal_casete": tasa([c for c in p if c["formato"] == "Cassette"]),
+            # la portada de otras ediciones del mismo álbum (otro cd, el vinilo, reediciones)
+            "edicion": tasa([c for c in casos if c["tipo"] == "edicion"]),
             "extra": tasa([c for c in casos if c["tipo"] == "extra"])}
 
 

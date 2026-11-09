@@ -32,15 +32,15 @@ letras se arma en unos segundos.
 
 ## Fotos reales de portadas
 
-Ya hay 250 fotos reales de CDs, vinilos y casetes de Discogs (`scripts/fetch_fotos_reales.py`) y su
+Ya hay fotos reales de 600 CDs, vinilos y casetes de Discogs (3 409 fotos, `scripts/fetch_fotos_reales.py`) y su
 evaluación (`benchmark/multimedia/fotos_reales.py`; resultados en `benchmark/multimedia/README.md`):
-el 70 % encuentra la portada digital en el top 10. Se podría:
+el 66 % encuentra la portada digital en el top 10 (~70 % en CDs y vinilos, 26 % en casetes). Se podría:
 
 - Quitar a mano las fotos principales que en realidad son el disco o la contraportada, para que el
   número mida solo al buscador
 - Sumar el histograma de color (`multimedia/color.py`) a SIFT, que no ve el color
 - Bajar más: el script sigue donde se quedó (`--total 500`). Discogs sin token deja 25 pedidos por
-  minuto y solo ~1 de cada 4 álbumes tiene edición física, así que 250 tardan ~2 h
+  minuto y solo ~1 de cada 3 álbumes tiene edición física (más entre los populares: `--orden popular`)
 
 ## Búsqueda por cara de artista (extra)
 

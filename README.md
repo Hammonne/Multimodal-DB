@@ -103,8 +103,9 @@ Comparamos la búsqueda lineal (revisar toda la base) contra IVF y HNSW, de 1 00
 - **IVF se construye 17 veces más rápido**, ideal si la colección cambia seguido
 - **Coseno le gana a la euclidiana** sobre vectores sin normalizar: con euclidiana el recall cae a 0.80
 
-También probamos consultas como las de una app real. Con **250 fotos reales de CDs y vinilos**
-bajadas de Discogs, el 70 % encuentra su portada digital en el top 10 (casi siempre primera). Con data
+También probamos consultas como las de una app real. Con fotos reales de **600 CDs, vinilos y casetes**
+bajadas de Discogs, el 66 % encuentra su portada digital en el top 10 (~70 % en CDs y vinilos, casi siempre
+primera). Con data
 augmentation, rotar, pasar a blanco y negro o cambiar los colores casi no afecta (0.99–1.00), porque SIFT
 trabaja en gris y es invariante a la rotación. Un
 fragmento de audio grabado con celular, en cambio, no acierta nunca, porque MFCC no aguanta que se
