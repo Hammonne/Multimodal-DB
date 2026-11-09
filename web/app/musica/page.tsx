@@ -113,7 +113,8 @@ export default function AppMusica() {
           <button className={vista.tipo === "buscar" ? styles.menuActivo : ""} onClick={() => ir({ tipo: "buscar" })}><Search size={18} /> <span>Buscar</span></button>
           <button className={vista.tipo === "reconocer" ? styles.menuActivo : ""} onClick={() => ir({ tipo: "reconocer" })}><Camera size={18} /> <span>Reconocer</span></button>
         </nav>
-        <a className={styles.consola} href="/" onClick={(e) => { e.preventDefault(); window.location.assign("/"); }}><Terminal size={16} /> <span>Consola técnica</span></a>
+        <a className={styles.consola} href="/como-funciona" onClick={(e) => { e.preventDefault(); window.location.assign("/como-funciona"); }}><Info size={16} /> <span>Cómo funciona</span></a>
+        <a className={`${styles.consola} ${styles.consolaSegunda}`} href="/" onClick={(e) => { e.preventDefault(); window.location.assign("/"); }}><Terminal size={16} /> <span>Consola técnica</span></a>
         <p className={styles.notaLateral}>Las búsquedas de imágenes, audio y caras usan nuestros índices (HNSW, IVF). Cada una queda registrada en la consola.</p>
       </aside>
 

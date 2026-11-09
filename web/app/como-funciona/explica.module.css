@@ -1,0 +1,67 @@
+/* cómo funciona: mismo papel y tinta que la consola técnica */
+.pagina { max-width: 1240px; margin: 0 auto; padding: 26px 28px 60px; color: var(--ink); }
+.cabecera { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.cabecera h1 { margin: 6px 0 0; font-size: clamp(24px, 3.4vw, 38px); line-height: 1.1; }
+.ceja { color: var(--amber); font: 600 11px 'IBM Plex Mono', monospace; letter-spacing: .08em; }
+.cabecera nav { display: flex; gap: 8px; }
+.cabecera nav a { padding: 8px 14px; border: 1px solid var(--line); color: var(--ink); text-decoration: none; font: 12px 'IBM Plex Mono', monospace; background: rgba(255,255,255,.3); }
+.cabecera nav a:last-child { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+.numeros { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 20px 0 14px; }
+.numeros div { padding: 12px 14px; border: 1px solid var(--line); background: var(--panel); }
+.numeros b { display: block; font-size: 22px; }
+.numeros span { color: var(--muted); font: 11px/1.35 'IBM Plex Mono', monospace; }
+.flujo { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 18px; font: 12px 'IBM Plex Mono', monospace; }
+.flujo span { display: inline-flex; align-items: center; gap: 6px; }
+.flujo span::before { content: ''; }
+.flujo span { padding: 0; }
+.flujo span > i { color: var(--amber); font-style: normal; }
+
+.seccion { margin: 18px 0 26px; padding: 22px; border: 1px solid var(--line); background: rgba(245,242,233,.88); box-shadow: 3px 3px 0 rgba(29,39,40,.06); }
+.seccion h2 { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 22px; }
+.seccion h2 b { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: var(--paper); font-size: 15px; }
+.bajada { max-width: 880px; margin: 0 0 14px; color: var(--muted); line-height: 1.5; }
+.error { color: #844b3f; font: 12px 'IBM Plex Mono', monospace; }
+.nota { color: var(--muted); font: 11.5px/1.45 'IBM Plex Mono', monospace; margin: 6px 0 0; }
+
+.selector { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin: 0 0 18px; }
+.selector button { display: flex; flex-direction: column; gap: 4px; padding: 5px; border: 1px solid var(--line); background: rgba(255,255,255,.35); cursor: pointer; text-align: left; min-width: 0; }
+.selector button:hover, .selector .elegido { border-color: var(--amber); background: var(--amber-soft); }
+.selector img { width: 100%; aspect-ratio: 1; object-fit: cover; }
+.selector span { font: 10px 'IBM Plex Mono', monospace; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selector .mas { display: grid; place-items: center; font: 12px 'IBM Plex Mono', monospace; color: var(--muted); }
+
+.dosColumnas { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 24px; align-items: start; }
+.imagenPuntos { position: relative; line-height: 0; border: 1px solid var(--line); }
+.imagenPuntos img { width: 100%; }
+.imagenPuntos svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.punto { cursor: pointer; }
+.punto:hover circle { stroke-width: 3; }
+.pasos, .pasosAudio { display: flex; flex-direction: column; gap: 12px; }
+.paso { padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--amber); background: rgba(255,255,255,.3); }
+.paso > span { display: block; margin-bottom: 4px; color: var(--amber); font: 600 11px 'IBM Plex Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+.paso p { margin: 0 0 6px; line-height: 1.5; font-size: 14px; }
+.fila { display: flex; gap: 14px; align-items: center; }
+.descriptor { width: 150px; flex: none; background: rgba(255,255,255,.5); }
+.barras { display: block; width: 100%; margin: 6px 0; background: rgba(255,255,255,.4); border: 1px solid var(--line); }
+
+.cancion { display: flex; align-items: center; gap: 14px; margin: 0 0 14px; flex-wrap: wrap; }
+.cancion img { width: 64px; height: 64px; object-fit: cover; }
+.cancion div { display: flex; flex-direction: column; }
+.cancion span { color: var(--muted); font-size: 13px; }
+.cancion audio { margin-left: auto; min-width: 280px; }
+.mapa { position: relative; width: 100%; border: 1px solid var(--line); cursor: crosshair; margin: 6px 0; }
+.mapa canvas { width: 100%; height: 100%; image-rendering: pixelated; display: block; }
+.mapa > i { position: absolute; top: 0; bottom: 0; width: 2px; background: #c0392b; pointer-events: none; }
+.mapa > span { position: absolute; top: 4px; left: 6px; padding: 1px 6px; background: rgba(0,0,0,.55); color: #fff; font: 10px 'IBM Plex Mono', monospace; }
+
+.proximamente { margin-top: 10px; color: var(--muted); font: 12px 'IBM Plex Mono', monospace; text-align: center; }
+
+@media (max-width: 860px) {
+  .dosColumnas { grid-template-columns: 1fr; }
+  .fila { flex-direction: column; align-items: flex-start; }
+  .pagina { padding: 16px; }
+}
+.figura { margin: 8px 0; }
+.figura figcaption { margin-bottom: 3px; color: var(--muted); font: 10.5px 'IBM Plex Mono', monospace; }
+.figura .barras { margin: 0; }

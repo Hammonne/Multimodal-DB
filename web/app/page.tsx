@@ -671,6 +671,7 @@ export default function Home() {
           <button className={view === "benchmarks" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("benchmarks")}><Zap size={14} /> Benchmarks</button>
           <button className={view === "transactions" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("transactions")}><LockKeyhole size={14} /> Transacciones</button>
           <button className={view === "actividad" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("actividad")}><History size={14} /> Actividad de la app</button>
+          <a className={styles.appButton} href="/como-funciona">Cómo funciona</a>
           <a className={styles.appButton} href="/musica">Entrar a la app ▸</a>
         </nav>
         <div className={styles.status}><span className={styles.statusDot} /> STORAGE ONLINE <span className={styles.divider} /> LOCAL INSTANCE</div>

@@ -470,6 +470,32 @@ def app_cara_recorte(path: str):
     return Response(content=contenido, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
 
+# cómo funciona: cada paso del pipeline sobre una portada o canción real (web/app/como-funciona)
+
+@app.get("/api/explica/resumen")
+def explica_resumen() -> dict[str, Any]:
+    from web.backend import explica
+    return _app(explica.resumen)
+
+
+@app.get("/api/explica/ejemplos")
+def explica_ejemplos(tipo: str = "sift", n: int = 12) -> dict[str, Any]:
+    from web.backend import explica
+    return {"ids": _app(explica.ejemplos, tipo, max(1, min(n, 40)))}
+
+
+@app.get("/api/explica/sift")
+def explica_sift(path: str) -> dict[str, Any]:
+    from web.backend import explica
+    return _app(explica.sift, path)
+
+
+@app.get("/api/explica/mfcc")
+def explica_mfcc(track: str) -> dict[str, Any]:
+    from web.backend import explica
+    return _app(explica.mfcc, track)
+
+
 @app.get("/api/app/actividad")
 def app_actividad(limite: int = 100) -> dict[str, Any]:
     return {"actividad": catalogo.actividad(limite)}

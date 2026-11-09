@@ -119,6 +119,20 @@ cd web && npm install && cd ..
 O con Docker: `docker compose up -d --build` (monta `data/` dentro del contenedor). Después de cambiar
 código hay que volver a correrlo con `--build`, porque la imagen copia el código al construirse.
 
+### Cómo funciona (`/como-funciona`)
+
+Una página que explica el pipeline de la Parte 4 paso a paso **calculado en vivo sobre nuestra data**
+(`web/backend/explica.py`), enlazada desde la consola y desde la app:
+
+- Los números de toda la colección: 9 145 255 descriptores SIFT de 20 005 portadas, 17 600 897 ventanas MFCC
+  de 13 643 audios, codebooks de 1 024 palabras, 33 648 histogramas TF-IDF y 8 937 caras
+- **SIFT:** eliges una portada y ves sus puntos clave (escala, orientación y color según su palabra visual),
+  el descriptor de 128 números de un punto como 4 × 4 celdas con 8 direcciones, en qué palabra cae y el
+  histograma TF y TF-IDF de la portada
+- **MFCC:** eliges una canción y la escuchas mientras ves la onda, el espectrograma, las 40 bandas mel, los
+  39 coeficientes de cada ventana, su palabra de audio y el histograma
+- Falta (para seguir): IVF, HNSW y reconocimiento de caras
+
 ### La app (`/musica`)
 
 Además de la consola técnica hay una **app** para usar la base como un reproductor de música:
