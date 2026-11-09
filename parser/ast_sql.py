@@ -230,9 +230,10 @@ class WithinExpr:
 
 # Indices vectoriales; NINGUNO es la busqueda lineal exacta
 class VectorIndex(Enum):
-    NINGUNO = auto()
+    NINGUNO = auto()    # sin USING: el índice de la tabla (HNSW, si no IVF) o búsqueda lineal
     IVF = auto()
     HNSW = auto()
+    LINEAL = auto()     # USING SEQ: búsqueda lineal exacta aunque haya índice
 
 
 # Nombres que acepta WITH METRIC=, con el nombre que usa indexes/metricas.py

@@ -63,9 +63,9 @@ def medir_tamano(archivos, tipo_columna, consultas, trabajo):
 
         # lineal: la primera consulta entrena el modelo de la columna; se mide aparte
         t0 = time.perf_counter()
-        sql(v, f"SELECT id FROM t WHERE SIMILAR_TO('{rutas_consulta[0]}', k={K});")
+        sql(v, f"SELECT id FROM t WHERE SIMILAR_TO('{rutas_consulta[0]}', k={K}) USING SEQ;")
         fila["lineal_modelo_s"] = time.perf_counter() - t0
-        exactos, fila["lineal_ms"] = consultar("")
+        exactos, fila["lineal_ms"] = consultar(" USING SEQ")
         for indice in ("ivf", "hnsw"):
             t0 = time.perf_counter()
             sql(v, f"CREATE INDEX ON t ({col}) USING {indice.upper()};")

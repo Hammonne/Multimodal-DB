@@ -83,8 +83,17 @@ class TestExecutorSimilitud(unittest.TestCase):
     def test_indice_igual_a_lineal(self):
         # con 40 filas el hnsw tiene que dar lo mismo que la búsqueda exacta
         con = self.ids(f"SELECT id FROM canciones WHERE SIMILAR_TO('{self.img}', k=5) USING HNSW")
-        sin = self.ids(f"SELECT id FROM canciones WHERE SIMILAR_TO('{self.img}', k=5)")
+        sin = self.ids(f"SELECT id FROM canciones WHERE SIMILAR_TO('{self.img}', k=5) USING SEQ")
         self.assertEqual(con, sin)
+
+    def test_sin_using_usa_el_indice(self):
+        # sin USING se usa el índice de la tabla; USING SEQ fuerza la búsqueda lineal
+        plan = self.sql(f"EXPLAIN SELECT id FROM canciones WHERE SIMILAR_TO('{self.img}', k=3)").explain
+        self.assertIn("Index Scan using hnsw_canciones_portada", plan)
+        plan = self.sql(f"EXPLAIN SELECT id FROM canciones WHERE SIMILAR_TO('{self.aud}', k=3)").explain
+        self.assertIn("Index Scan using ivf_canciones_audio", plan)
+        plan = self.sql(f"EXPLAIN SELECT id FROM canciones WHERE SIMILAR_TO('{self.img}', k=3) USING SEQ").explain
+        self.assertIn("Seq Scan on canciones", plan)
 
     def test_filtro_y_limit(self):
         genero = self.filas[3]["genre"][:18]
@@ -103,7 +112,7 @@ class TestExecutorSimilitud(unittest.TestCase):
                         f"USING HNSW").explain
         self.assertIn("Index Scan using hnsw_canciones_portada", plan)
         plan = self.sql(f"EXPLAIN ANALYZE SELECT id FROM canciones WHERE SIMILAR_TO('{self.aud}', "
-                        f"k=3)").explain
+                        f"k=3) USING SEQ").explain
         self.assertIn("Seq Scan on canciones", plan)
         self.assertIn("rows=3", plan)
 

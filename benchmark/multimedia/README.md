@@ -264,7 +264,7 @@ sirve con cualquier carpeta de imágenes o audios (`benchmark_sql.py`). Para cad
 1. `CREATE TABLE t (id INT PRIMARY KEY, nombre VARCHAR(80), archivo IMAGE)` (o `AUDIO`) e
    `IMPORT INTO t FROM 'carpeta/'`
 2. Búsqueda lineal: la primera consulta entrena el modelo de la columna (se mide aparte) y después
-   `SIMILAR_TO(..., k=10)` sin índice da los 10 vecinos exactos
+   `SIMILAR_TO(..., k=10) USING SEQ` da los 10 vecinos exactos
 3. `CREATE INDEX ... USING IVF` y `USING HNSW`: cada uno entrena su codebook con esos archivos; recall@10
    contra la lineal
 

@@ -616,7 +616,7 @@ class ExecuteVisitor(Visitor):
         vectoriales = [(pos, idx) for pos, idxs in tabla.secondary_indexes.items()
                        for idx in idxs
                        if isinstance(idx, VectorSecondaryIndex) and idx.tipo == tipo]
-        if pedido != VectorIndex.NINGUNO:
+        if pedido in (VectorIndex.IVF, VectorIndex.HNSW):
             for pos, idx in vectoriales:
                 if idx.tipo_indice == pedido.name.lower():
                     return pos, idx
@@ -626,7 +626,12 @@ class ExecuteVisitor(Visitor):
                 f"USING {pedido.name}"
             )
         if vectoriales:
-            return vectoriales[0][0], None
+            if pedido == VectorIndex.LINEAL:
+                # USING SEQ: la columna del índice, pero recorriendo todo (la respuesta exacta)
+                return vectoriales[0][0], None
+            # sin USING: el índice de la tabla, primero HNSW (mejor recall) y si no IVF
+            vectoriales.sort(key=lambda par: par[1].tipo_indice != "hnsw")
+            return vectoriales[0]
 
         # sin indice: primero una columna IMAGE o AUDIO del mismo tipo que el archivo de consulta
         for pos, t in enumerate(tabla.schema):

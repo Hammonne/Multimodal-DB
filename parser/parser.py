@@ -335,16 +335,21 @@ class Parser:
         self.validar_similitud(s)
         return s
 
-    # UsingVec ::= USING (IVF | HNSW) [WITH METRIC = id]
-    # sin WITH METRIC se usa coseno
+    # UsingVec ::= USING (IVF | HNSW | SEQ) [WITH METRIC = id]
+    # sin WITH METRIC se usa coseno. SEQ (o LINEAL, SEQUENTIAL) fuerza la búsqueda lineal exacta
     def parse_using_vectorial(self, s):
         self.match(Token.Type.USING)
         if self.match(Token.Type.IVF):
             s.indice_vectorial = VectorIndex.IVF
         elif self.match(Token.Type.HNSW):
             s.indice_vectorial = VectorIndex.HNSW
+        elif self.match(Token.Type.SEQUENTIAL):
+            s.indice_vectorial = VectorIndex.LINEAL
+        elif self.check(Token.Type.ID) and self.current.text.upper() in ("SEQ", "LINEAL"):
+            self.advance()
+            s.indice_vectorial = VectorIndex.LINEAL
         else:
-            self.error("se esperaba IVF o HNSW despues de USING")
+            self.error("se esperaba IVF, HNSW o SEQ despues de USING")
 
         if self.match(Token.Type.WITH):
             if not self.match(Token.Type.METRIC):

@@ -178,7 +178,7 @@ Pruebas: `python run_all_tests.py`.
 Tipo       ::= ... | IMAGE | AUDIO
 Import     ::= IMPORT INTO id FROM ( 'archivo.csv' | 'carpeta/' )
 SimilarTo  ::= SIMILAR_TO ( 'ruta' , [k =] num )
-UsingVec   ::= USING (IVF | HNSW) [WITH METRIC = (cosine | euclidean | dot)]
+UsingVec   ::= USING (IVF | HNSW | SEQ) [WITH METRIC = (cosine | euclidean | dot)]
 Proj       ::= ... | SIMILARITY_SCORE ( ) [AS id]
 CreateIdx  ::= CREATE INDEX ON id ( columna ) USING (IVF | HNSW)
 ```
@@ -226,8 +226,9 @@ Los resultados quedan en `benchmark/multimedia/sql/` (ver
 - La ruta de la consulta puede ser absoluta o relativa a `data/` y no tiene que estar en la tabla:
   se le saca el vector con el mismo modelo de la columna. La extensión dice si es imagen o audio
 - La columna puede ser `IMAGE`, `AUDIO` o un `VARCHAR` con rutas de imágenes o de audios (no mezcladas)
-- Sin `USING` se usa el índice vectorial que tenga la tabla, y si no tiene, búsqueda lineal.
-  Sin `WITH METRIC` se usa coseno
+- Sin `USING` se usa el índice vectorial que tenga la tabla (HNSW si tiene los dos, si no IVF), y si
+  no tiene, búsqueda lineal. `USING SEQ` (o `LINEAL`) fuerza la búsqueda lineal exacta aunque haya
+  índice. Sin `WITH METRIC` se usa coseno
 - `SIMILARITY_SCORE()`: mayor = más parecido. Coseno y dot dan la similitud, euclidean da 1 / (1 + d)
 - Se combina con otras condiciones con `AND` y con `LIMIT`. No va dentro de un `OR`, con `JOIN` ni
   con agregaciones
