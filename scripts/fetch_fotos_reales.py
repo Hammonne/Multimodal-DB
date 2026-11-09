@@ -5,6 +5,7 @@
 # uso: python3 scripts/fetch_fotos_reales.py --total 250
 #      python3 scripts/fetch_fotos_reales.py --ediciones 6   (más ediciones de los álbumes que ya tienen foto)
 #      python3 scripts/fetch_fotos_reales.py --artista "KAROL G" --ediciones 6   (todos los álbumes de un artista)
+#      python3 scripts/fetch_fotos_reales.py --total 600 --orden popular --ediciones 6   (primero los más escuchados)
 import argparse
 import os
 import random
@@ -91,8 +92,11 @@ def main():
     ap.add_argument("--ediciones", type=int, default=0,
                     help="en vez de buscar álbumes nuevos, baja hasta N ediciones de los que ya tienen foto")
     ap.add_argument("--artista", default="", help="solo los álbumes de este artista (nombre como en artists.csv)")
+    ap.add_argument("--orden", choices=["azar", "popular"], default="azar",
+                    help="popular: primero los álbumes con canciones más escuchadas (suelen tener cd o vinilo)")
     args = ap.parse_args()
-    if args.ediciones and not args.artista:
+    # --ediciones solo: completa ediciones de lo ya bajado; con --artista u --orden popular primero busca álbumes
+    if args.ediciones and not args.artista and args.orden == "azar":
         mas_ediciones(args)
         return
 
@@ -100,6 +104,11 @@ def main():
     portadas = [r for r in load_csv(os.path.join(args.out, "covers.csv"))
                 if not r["duplicada_de"] and r["album"] and r["artist_id"] in nombres]
     random.Random(args.seed).shuffle(portadas)
+    if args.orden == "popular":
+        rank = {}
+        for c in load_csv(os.path.join(args.out, "songs.csv")):
+            rank[c["album_id"]] = rank.get(c["album_id"], 0) + int(c["deezer_rank"] or 0)
+        portadas.sort(key=lambda p: -rank.get(p["album_id"], 0))
     if args.artista:
         portadas = [p for p in portadas if nombres[p["artist_id"]].casefold() == args.artista.casefold()]
         args.total = 10 ** 6
@@ -144,7 +153,7 @@ def main():
                 print(f"[{len(con_foto)}/{args.total}] {artista} - {p['album']} ({formato}, "
                       f"{len(nuevas)} fotos)", flush=True)
     print(f"{len(con_foto)} álbumes con foto de {len(probados)} probados -> {salida}")
-    if args.artista and args.ediciones:
+    if args.ediciones and (args.artista or args.orden == "popular"):
         mas_ediciones(args, {p["album_id"] for p in portadas})
 
 
