@@ -26,6 +26,8 @@ class DataType(Enum):
     DATE_TYPE = auto()
     VARCHAR_TYPE = auto()
     POINT_TYPE = auto()
+    IMAGE_TYPE = auto()
+    AUDIO_TYPE = auto()
 
 
 # Operadores relacionales soportados

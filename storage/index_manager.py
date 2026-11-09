@@ -315,10 +315,11 @@ class IndexManager:
         index_type: str
     ) -> VectorSecondaryIndex:
         # ivf o hnsw sobre una columna varchar con rutas de imágenes o audios (parte 4)
-        if not table.schema[column_index].strip().lower().startswith("varchar"):
+        tipo = table.schema[column_index].strip().lower()
+        if not (tipo.startswith("varchar") or tipo in ("image", "audio")):
             raise ValueError(
-                f"Un índice {index_type.upper()} va sobre una columna VARCHAR con la ruta "
-                f"del archivo; '{column_name}' es de tipo '{table.schema[column_index]}'"
+                f"Un índice {index_type.upper()} va sobre una columna IMAGE, AUDIO o VARCHAR con la "
+                f"ruta del archivo; '{column_name}' es de tipo '{table.schema[column_index]}'"
             )
         index = VectorSecondaryIndex(f"{index_name}.npz", index_type)
         index.construir(table, column_index)

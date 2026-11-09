@@ -54,9 +54,12 @@ from indexes.bitmap_index import BitmapIndex
 from storage.index_manager import RTreeSecondaryIndex
 from storage.vector_index import (VectorSecondaryIndex, Vectorizador, limpiar,
                                   ruta_archivo, score as score_similitud)
+from multimedia import features as F
 from multimedia.features import tipo_de
 from storage.formats.serializers.variable_length_serializer import VariableLengthRecordSerializer
 from storage.lock_manager import LockMode
+from storage.formats.data_types import MEDIA_DATA_TYPES
+from storage.modelo_multimedia import ModeloMultimedia
 from storage.rid import RID
 from text_based.spimi import SPIMIIndex
 from text_based.bm25 import BM25
@@ -129,6 +132,8 @@ TIPOS = {
     DataType.BOOL_TYPE: "boolean",
     DataType.DATE_TYPE: "date",
     DataType.POINT_TYPE: "point",
+    DataType.IMAGE_TYPE: "image",
+    DataType.AUDIO_TYPE: "audio",
 }
 
 def tipo_a_str(columna) -> str:
@@ -295,8 +300,11 @@ class ExecuteVisitor(Visitor):
     def visit_import_csv_stmt(self, stm):
         """Carga un CSV generado por los scripts en una tabla ya creada."""
         archivo = os.path.abspath(stm.archivo)
+        if os.path.isdir(archivo):
+            return self._importar_carpeta(stm, archivo)
         if not os.path.isfile(archivo):
             raise ExecutionError(f"no existe el archivo CSV: {archivo}")
+        self._carpeta_csv = os.path.dirname(archivo)
         with self._table_locks([stm.tabla], LockMode.EXCLUSIVE):
             tabla = self._abrir(stm.tabla)
             with open(archivo, newline="", encoding="utf-8-sig") as handle:
@@ -332,10 +340,62 @@ class ExecuteVisitor(Visitor):
             f"{inserted} fila(s) importada(s) desde '{stm.archivo}'"
         )
 
+    def _importar_carpeta(self, stm, carpeta):
+        # IMPORT INTO tabla FROM 'carpeta/': una fila por imagen o audio de la carpeta (dataset propio).
+        # La tabla necesita una columna IMAGE o AUDIO; si tiene una INT de clave se numera 1, 2, 3...
+        # y la primera VARCHAR recibe el nombre del archivo
+        with self._table_locks([stm.tabla], LockMode.EXCLUSIVE):
+            tabla = self._abrir(stm.tabla)
+            esquema = [t.strip().lower() for t in tabla.schema]
+            media = [i for i, t in enumerate(esquema) if t in MEDIA_DATA_TYPES]
+            if not media:
+                raise ExecutionError(f"'{stm.tabla}' no tiene una columna IMAGE o AUDIO para cargar la carpeta")
+            pos = media[0]
+            extensiones = F.IMAGEN if esquema[pos] == "image" else F.AUDIO
+            archivos = sorted(f for f in os.listdir(carpeta)
+                              if os.path.splitext(f)[1].lower() in extensiones)
+            if not archivos:
+                raise ExecutionError(f"la carpeta no tiene archivos de tipo {esquema[pos].upper()}")
+            texto = next((i for i, t in enumerate(esquema) if t.startswith("varchar") and i != pos), None)
+            insertadas = 0
+            for n, nombre in enumerate(archivos, start=1):
+                fila = []
+                for i, t in enumerate(esquema):
+                    if i == pos:
+                        fila.append(self._ruta_media(os.path.join(carpeta, nombre)))
+                    elif i == texto:
+                        fila.append(os.path.splitext(nombre)[0])
+                    elif t in ("integer", "int"):
+                        fila.append(n)
+                    elif t == "float":
+                        fila.append(float(n))
+                    elif t in ("boolean", "bool"):
+                        fila.append(False)
+                    else:
+                        fila.append("")
+                tabla.insert(fila, mutation_logger=self._mutation_logger())
+                insertadas += 1
+        self.resultado = Resultado(f"{insertadas} archivo(s) importado(s) desde la carpeta '{stm.archivo}'")
+
     @staticmethod
-    def _csv_value(value, schema):
+    def _ruta_media(ruta):
+        # se guarda relativa a data/ si está dentro (más corta y portable); si no, absoluta
+        ruta = os.path.abspath(ruta)
+        data = os.path.abspath(F.DATA)
+        return os.path.relpath(ruta, data) if ruta.startswith(data + os.sep) else ruta
+
+    def _csv_value(self, value, schema):
         value = "" if value is None else value.strip()
         normalized = schema.lower()
+        if normalized in MEDIA_DATA_TYPES:
+            # la ruta del archivo: tal cual si existe, si no relativa al csv o a data/
+            if not value:
+                return ""
+            carpeta_csv = getattr(self, "_carpeta_csv", "")
+            for candidata in (value, os.path.join(carpeta_csv, value), os.path.join(F.DATA, value)):
+                if os.path.exists(candidata):
+                    return self._ruta_media(candidata)
+            raise ValueError(f"no existe el archivo '{value}' (se buscó junto al csv y en data/)")
         if normalized == "integer":
             return int(value)
         if normalized == "float":
@@ -568,7 +628,12 @@ class ExecuteVisitor(Visitor):
         if vectoriales:
             return vectoriales[0][0], None
 
-        # sin indice: la primera columna varchar cuyos archivos son del mismo tipo
+        # sin indice: primero una columna IMAGE o AUDIO del mismo tipo que el archivo de consulta
+        for pos, t in enumerate(tabla.schema):
+            if MEDIA_DATA_TYPES.get(t.strip().lower()) == tipo:
+                return pos, None
+
+        # si no, la primera columna varchar cuyos archivos son del mismo tipo
         for _, registro in tabla.scan():
             for pos, t in enumerate(tabla.schema):
                 if not t.strip().lower().startswith("varchar"):
@@ -581,9 +646,37 @@ class ExecuteVisitor(Visitor):
             break
         raise ExecutionError(f"'{tabla.name}' no tiene una columna con rutas de {nombre_tipo}")
 
-    def _vector_consulta(self, similar):
+    def _es_media(self, tabla, pos):
+        return tabla.schema[pos].strip().lower() in MEDIA_DATA_TYPES
+
+    def _modelo_columna(self, tabla, pos):
+        # búsqueda lineal sobre una columna IMAGE / AUDIO sin índice: se entrena un modelo con sus archivos
+        # y se guarda en memoria mientras la tabla no cambie (mismas filas)
+        filas = [(rid, registro) for rid, registro in tabla.scan() if limpiar(registro[pos])]
+        clave = (tabla.name, pos, len(filas), tuple(rid for rid, _ in filas[:3]))
+        cache = getattr(self, "_modelos", {})
+        if clave not in cache:
+            rutas = [ruta_archivo(registro[pos]) for _, registro in filas]
+            faltan = [r for r in rutas if not os.path.exists(r)]
+            if faltan:
+                raise ExecutionError(f"no existe el archivo '{faltan[0]}'")
+            if not rutas:
+                raise ExecutionError(f"la columna '{tabla.column_names[pos]}' no tiene archivos")
+            modelo = ModeloMultimedia(MEDIA_DATA_TYPES[tabla.schema[pos].strip().lower()]).entrenar(rutas)
+            cache = {k: v for k, v in cache.items() if k[:2] != clave[:2]}
+            cache[clave] = (modelo, [(registro, v) for (_, registro), v in
+                                     zip(filas, modelo.vectores_entrenamiento())])
+            self._modelos = cache
+        return cache[clave]
+
+    def _vector_consulta(self, similar, tabla=None, pos=None, indice=None):
         try:
-            return self._vectorizador().vector(ruta_archivo(similar.archivo))
+            ruta = ruta_archivo(similar.archivo)
+            if indice is not None and indice.modelo is not None:
+                return indice.vector_consulta(ruta)
+            if tabla is not None and pos is not None and self._es_media(tabla, pos):
+                return self._modelo_columna(tabla, pos)[0].vector(ruta)
+            return self._vectorizador().vector(ruta)
         except FileNotFoundError:
             raise ExecutionError(f"no existe el archivo de consulta '{similar.archivo}'")
         except ValueError as e:
@@ -629,6 +722,17 @@ class ExecuteVisitor(Visitor):
         self.plan.append(entrada)
         vec = self._vectorizador()
         todos = []
+        if self._es_media(tabla, pos):
+            with self._medir(entrada) as medida:
+                for registro, v in self._modelo_columna(tabla, pos)[1]:
+                    if filtro is not None and not self._evaluar(filtro, registro, resolver):
+                        medida.descartada()
+                        continue
+                    medida.emitida()
+                    todos.append((registro, score_similitud(metrica, q, v)))
+            entrada["candidates"] = len(todos)
+            todos.sort(key=lambda par: -par[1])
+            return todos[:k]
         with self._medir(entrada) as medida:
             for _, registro in tabla.scan():
                 if filtro is not None and not self._evaluar(filtro, registro, resolver):
@@ -657,7 +761,7 @@ class ExecuteVisitor(Visitor):
         t_plan = time.perf_counter()
         pos, indice = self._plan_similitud(tabla, stm, similar)
         self._planning_ms += (time.perf_counter() - t_plan) * 1000.0
-        q = self._vector_consulta(similar)
+        q = self._vector_consulta(similar, tabla, pos, indice)
         pares = self._candidatos_similares(tabla, stm, similar, pos, indice, q, resolver)
 
         # ORDER BY: el score (o su alias) o cualquier otra columna; sin ORDER BY el mas parecido primero
@@ -794,10 +898,11 @@ class ExecuteVisitor(Visitor):
                 raise ExecutionError(
                     f"un indice {stm.tipo.name[:-4]} exige una tabla USING HEAP"
                 )
-            if not tabla.schema[pos].strip().lower().startswith("varchar"):
+            tipo_col = tabla.schema[pos].strip().lower()
+            if not (tipo_col.startswith("varchar") or tipo_col in ("image", "audio")):
                 raise ExecutionError(
-                    f"un indice {stm.tipo.name[:-4]} va sobre una columna VARCHAR con "
-                    f"la ruta de la imagen o el audio; '{stm.columna}' es de tipo "
+                    f"un indice {stm.tipo.name[:-4]} va sobre una columna IMAGE o AUDIO (o un "
+                    f"VARCHAR con la ruta del archivo); '{stm.columna}' es de tipo "
                     f"'{tabla.schema[pos]}'"
                 )
         elif stm.clustered:

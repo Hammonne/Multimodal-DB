@@ -181,6 +181,13 @@ class Parser:
             cd.tipo = DataType.DATE_TYPE
         elif self.match(Token.Type.POINT):
             cd.tipo = DataType.POINT_TYPE
+        elif self.check(Token.Type.ID) and self.current.text.upper() in ("IMAGE", "IMAGEN"):
+            # IMAGE y AUDIO no son palabras reservadas: así una columna se puede seguir llamando "audio"
+            self.advance()
+            cd.tipo = DataType.IMAGE_TYPE
+        elif self.check(Token.Type.ID) and self.current.text.upper() == "AUDIO":
+            self.advance()
+            cd.tipo = DataType.AUDIO_TYPE
         elif self.match(Token.Type.VARCHAR):
             cd.tipo = DataType.VARCHAR_TYPE
             if not self.match(Token.Type.LPAREN):
