@@ -216,7 +216,8 @@ class Catalogo:
         return {**a, "canciones": [self._cancion(t) for t in canciones[:20]],
                 "albumes": albumes, "integrantes": self.integrantes.get(arid, []), "fotos": fotos}
 
-    def se_parece(self, arid: str, k: int = 8) -> dict[str, Any]:
+    def se_parece(self, arid: str, k: int = 10) -> dict[str, Any]:
+        k = max(1, min(int(k), 50))
         # artistas con caras parecidas: los embeddings de 128 dims de faces.npz (face_recognition, ya
         # calculados) en nuestro hnsw con euclidiana; no hace falta volver a detectar caras
         import numpy as np
@@ -233,7 +234,7 @@ class Catalogo:
             return {"artista": a, "parecidos": [], "tecnico": None}
         q = datos["embedding"][mias].mean(axis=0)
         t0 = time.perf_counter()
-        pos, dist = indice.buscar(q, 60, 100)
+        pos, dist = indice.buscar(q, k * 6 + 10, max(100, k * 6 + 10))
         ms = (time.perf_counter() - t0) * 1000
         vistos, salida = {arid}, []
         for p, dd in zip(pos, dist):
@@ -280,7 +281,8 @@ class Catalogo:
 
     # búsquedas con nuestros índices
 
-    def portadas_parecidas(self, aid: str, k: int = 12) -> dict[str, Any]:
+    def portadas_parecidas(self, aid: str, k: int = 10) -> dict[str, Any]:
+        k = max(1, min(int(k), 50))
         self._cargar()
         a = self._album(aid)
         if not a:
@@ -318,6 +320,7 @@ class Catalogo:
                             "ms": r["duration_ms"]}}
 
     def suena_parecido(self, tid: str, k: int = 10) -> dict[str, Any]:
+        k = max(1, min(int(k), 50))
         self._cargar()
         c = self._cancion(tid)
         if not c:
@@ -341,7 +344,7 @@ class Catalogo:
             self._caras = caras.abrir(str(self.data))
         return self._caras
 
-    def reconocer_caras(self, contenido: bytes, en_vivo: bool = False) -> dict[str, Any]:
+    def reconocer_caras(self, contenido: bytes, en_vivo: bool = False, k: int = 10) -> dict[str, Any]:
         # como en el lab 11: se detectan las caras de la foto (o del cuadro de la cámara), cada una se
         # vuelve un embedding de 128 dims y se busca la más cercana en el hnsw de caras de artistas
         import cv2
@@ -364,7 +367,7 @@ class Catalogo:
         t0 = time.perf_counter()
         salida, revisados = [], 0
         for (top, right, bottom, left), emb in zip(cajas, embs):
-            res = caras.buscar_embedding(datos, indice, emb, k=10)
+            res = caras.buscar_embedding(datos, indice, emb, k=max(1, min(int(k), 50)))
             revisados += int(indice.candidatos)
             candidatos = []
             for n, r in enumerate(res):
@@ -388,7 +391,7 @@ class Catalogo:
                                titulo=", ".join(nombres) or "sin caras", indice="HNSW (M=16, ef_search=50)",
                                metrica=f"euclidiana (misma persona si < {caras.UMBRAL})",
                                descriptor="embedding de cara de 128 dims (ResNet de dlib, face_recognition)",
-                               sql="SELECT nombre FROM artistas WHERE SIMILAR_TO(cara(foto), k=10) USING HNSW;",
+                               sql=f"SELECT nombre FROM artistas WHERE SIMILAR_TO(cara(foto), k={k}) USING HNSW;",
                                revisados=revisados, total=len(datos["embedding"]),
                                ms=round(t_cara + t_busqueda, 1), resultados=len(salida))
         return {"caras": salida, "ancho": ancho, "alto": alto,
@@ -424,21 +427,22 @@ class Catalogo:
         mias = np.flatnonzero((datos["kind"] == tipo) & (datos["owner_id"] == dueno))
         return [str(datos["path"][i]) for i in mias[:limite]]
 
-    def reconocer_portada_bytes(self, contenido: bytes, en_vivo: bool = False) -> dict[str, Any]:
+    def reconocer_portada_bytes(self, contenido: bytes, en_vivo: bool = False, k: int = 10) -> dict[str, Any]:
         # un cuadro de la cámara: se guarda en un archivo temporal para sacarle los sift y se borra
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as fh:
             fh.write(contenido)
             ruta = Path(fh.name)
         try:
-            return self.reconocer(ruta, registrar=not en_vivo, en_vivo=en_vivo)
+            return self.reconocer(ruta, registrar=not en_vivo, en_vivo=en_vivo, k=k)
         finally:
             ruta.unlink(missing_ok=True)
 
-    def reconocer(self, path: Path, registrar: bool = True, en_vivo: bool = False) -> dict[str, Any]:
+    def reconocer(self, path: Path, registrar: bool = True, en_vivo: bool = False, k: int = 10) -> dict[str, Any]:
+        k = max(1, min(int(k), 50))
         # foto de un cd o vinilo -> álbum, fragmento de audio -> canción
         self._cargar()
-        r = multimedia_search.search_file(path, "hnsw", "coseno", 12)
+        r = multimedia_search.search_file(path, "hnsw", "coseno", min(100, k + 8))
         if r["kind"] == "sift":
             vistos, salida = set(), []
             for x in r["results"]:
@@ -459,10 +463,10 @@ class Catalogo:
                        titulo=(salida[0]["titulo"] if en_vivo and salida else path.name.split("_", 1)[-1]),
                        indice="HNSW (M=16, ef_search=50)",
                        metrica="coseno", descriptor=desc,
-                       sql=f"SELECT * FROM ... WHERE SIMILAR_TO('{path.name}', k=12) USING HNSW;",
+                       sql=f"SELECT * FROM ... WHERE SIMILAR_TO('{path.name}', k={k}) USING HNSW;",
                        revisados=r["candidates"], total=r["documents"],
                        ms=round(r["duration_ms"] + r.get("extract_ms", 0), 2), resultados=len(salida))
-        return {"tipo": tipo, "resultados": salida[:8],
+        return {"tipo": tipo, "resultados": salida[:k],
                 "tecnico": {"indice": "HNSW", "revisados": r["candidates"], "total": r["documents"],
                             "ms": r["duration_ms"], "extraccion_ms": r.get("extract_ms", 0)}}
 

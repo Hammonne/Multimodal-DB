@@ -374,6 +374,7 @@ def precalentar_multimedia() -> None:
 class AppReconocerRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     content_base64: str = Field(min_length=1, max_length=30_000_000)
+    k: int = Field(default=10, ge=1, le=50)
 
 
 def _app(funcion, *args):
@@ -396,8 +397,8 @@ def app_artista(artista_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/app/artista/{artista_id}/se-parece")
-def app_artista_se_parece(artista_id: str) -> dict[str, Any]:
-    return _app(catalogo.se_parece, artista_id)
+def app_artista_se_parece(artista_id: str, k: int = 10) -> dict[str, Any]:
+    return _app(catalogo.se_parece, artista_id, k)
 
 
 @app.get("/api/app/album/{album_id}")
@@ -406,8 +407,8 @@ def app_album(album_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/app/album/{album_id}/parecidos")
-def app_album_parecidos(album_id: str) -> dict[str, Any]:
-    return _app(catalogo.portadas_parecidas, album_id)
+def app_album_parecidos(album_id: str, k: int = 10) -> dict[str, Any]:
+    return _app(catalogo.portadas_parecidas, album_id, k)
 
 
 @app.get("/api/app/cancion/{track_id}")
@@ -416,8 +417,8 @@ def app_cancion(track_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/app/cancion/{track_id}/parecidas")
-def app_cancion_parecidas(track_id: str) -> dict[str, Any]:
-    return _app(catalogo.suena_parecido, track_id)
+def app_cancion_parecidas(track_id: str, k: int = 10) -> dict[str, Any]:
+    return _app(catalogo.suena_parecido, track_id, k)
 
 
 @app.post("/api/app/reconocer")
@@ -435,13 +436,14 @@ def app_reconocer(request: AppReconocerRequest) -> dict[str, Any]:
     seguro = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename).stem)[:80] or "consulta"
     path = destino / f"{int(time.time() * 1000)}_{seguro}{suffix}"
     path.write_bytes(content)
-    return _app(catalogo.reconocer, path)
+    return _app(catalogo.reconocer, path, True, False, request.k)
 
 
 class AppCamaraRequest(BaseModel):
     # un cuadro de la cámara (o una foto) en base64, sin guardarlo en data/
     content_base64: str = Field(min_length=1, max_length=20_000_000)
     en_vivo: bool = False
+    k: int = Field(default=10, ge=1, le=50)
 
 
 def _bytes(contenido: str) -> bytes:
@@ -453,12 +455,12 @@ def _bytes(contenido: str) -> bytes:
 
 @app.post("/api/app/reconocer-cara")
 def app_reconocer_cara(request: AppCamaraRequest) -> dict[str, Any]:
-    return _app(catalogo.reconocer_caras, _bytes(request.content_base64), request.en_vivo)
+    return _app(catalogo.reconocer_caras, _bytes(request.content_base64), request.en_vivo, request.k)
 
 
 @app.post("/api/app/reconocer-portada")
 def app_reconocer_portada(request: AppCamaraRequest) -> dict[str, Any]:
-    return _app(catalogo.reconocer_portada_bytes, _bytes(request.content_base64), request.en_vivo)
+    return _app(catalogo.reconocer_portada_bytes, _bytes(request.content_base64), request.en_vivo, request.k)
 
 
 @app.get("/api/app/cara-recorte")

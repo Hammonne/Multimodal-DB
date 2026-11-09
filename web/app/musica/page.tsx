@@ -71,6 +71,13 @@ export default function AppMusica() {
   const [pausa, setPausa] = useState(true);
   const [tiempo, setTiempo] = useState(0);
   const audio = useRef<HTMLAudioElement | null>(null);
+  // cuántos parecidos mostrar en todas las búsquedas (10 por defecto); el navegador lo recuerda
+  const [k, setKEstado] = useState(10);
+  useEffect(() => { try { const v = Number(localStorage.getItem("chuta-k")); if (v >= 1 && v <= 50) setKEstado(v); } catch { /* sin almacenamiento */ } }, []);
+  function setK(v: number) {
+    setKEstado(v);
+    try { localStorage.setItem("chuta-k", String(v)); } catch { /* sin almacenamiento */ }
+  }
 
   function ir(v: Vista) {
     setHistorial((h) => [...h, v]);
@@ -95,7 +102,7 @@ export default function AppMusica() {
     }
   }, [sonando]);
 
-  const ctx = { ir, reproducir, sonando, pausa, tiempo };
+  const ctx = { ir, reproducir, sonando, pausa, tiempo, k, setK };
 
   return (
     <div className={styles.app}>
@@ -138,7 +145,19 @@ export default function AppMusica() {
   );
 }
 
-type Ctx = { ir: (v: Vista) => void; reproducir: (c: Cancion) => void; sonando: Cancion | null; pausa: boolean; tiempo: number };
+type Ctx = { ir: (v: Vista) => void; reproducir: (c: Cancion) => void; sonando: Cancion | null; pausa: boolean; tiempo: number; k: number; setK: (k: number) => void };
+
+function SelectorK({ k, setK }: { k: number; setK: (k: number) => void }) {
+  // número editable dentro de los títulos ("los [10] más parecidos"); se aplica al salir o con Enter
+  const [texto, setTexto] = useState(String(k));
+  useEffect(() => { setTexto(String(k)); }, [k]);
+  function aplicar() {
+    const n = Math.round(Number(texto));
+    if (Number.isFinite(n) && n >= 1) setK(Math.min(50, n)); else setTexto(String(k));
+  }
+  return <input className={styles.selectorK} type="number" min={1} max={50} value={texto} title="cuántos mostrar (1 a 50)"
+    onChange={(e) => setTexto(e.target.value)} onBlur={aplicar} onKeyDown={(e) => { if (e.key === "Enter") { aplicar(); (e.target as HTMLInputElement).blur(); } }} />;
+}
 
 function useDatos<T>(path: string | null) {
   const [datos, setDatos] = useState<T | null>(null);
@@ -236,7 +255,7 @@ function Inicio(ctx: Ctx) {
 
 function PaginaArtista({ id, ...ctx }: Ctx & { id: string }) {
   const { datos, error } = useDatos<Artista & { canciones: Cancion[]; albumes: Album[]; integrantes: Integrante[]; fotos: string[] }>(`/api/app/artista/${id}`);
-  const { datos: parecido } = useDatos<{ parecidos: (Artista & { foto_cara: string; distancia: number; misma_persona: boolean })[]; tecnico: Tecnico | null }>(`/api/app/artista/${id}/se-parece`);
+  const { datos: parecido } = useDatos<{ parecidos: (Artista & { foto_cara: string; distancia: number; misma_persona: boolean })[]; tecnico: Tecnico | null }>(`/api/app/artista/${id}/se-parece?k=${ctx.k}`);
   const [todasFotos, setTodasFotos] = useState(false);
   const [grande, setGrande] = useState("");
   if (!datos) return <Cargando error={error} />;
@@ -268,7 +287,7 @@ function PaginaArtista({ id, ...ctx }: Ctx & { id: string }) {
         {datos.fotos.length > 6 && <button className={styles.botonBorde} onClick={() => setTodasFotos(!todasFotos)}>{todasFotos ? "Ver menos" : `Ver las ${datos.fotos.length} fotos`}</button>}
       </>}
       {parecido && parecido.parecidos.length > 0 && <>
-        <h2 className={styles.titulo}><Sparkles size={18} /> Se parece a…</h2>
+        <h2 className={styles.titulo}><Sparkles size={18} /> Los <SelectorK k={ctx.k} setK={ctx.setK} /> artistas que más se parecen</h2>
         <p className={styles.ayuda}>Artistas cuya cara se parece, según los embeddings de cara (como en el Lab 11) buscados con nuestro HNSW.</p>
         <div className={styles.grilla}>{parecido.parecidos.map((p) => <button key={p.id} className={styles.tarjeta} onClick={() => ctx.ir({ tipo: "artista", id: p.id })}>
           <Imagen src={p.foto_cara} redonda alt={p.nombre} /><b>{p.nombre}</b><span>{p.misma_persona ? "¡muy parecido!" : `distancia ${p.distancia.toFixed(2)}`}</span>
@@ -286,9 +305,9 @@ function PaginaAlbum({ id, ...ctx }: Ctx & { id: string }) {
   const [buscando, setBuscando] = useState(false);
   async function buscarParecidos() {
     setBuscando(true);
-    try { setParecidos(await pedir(`/api/app/album/${id}/parecidos`)); } catch { setParecidos(null); } finally { setBuscando(false); }
+    try { setParecidos(await pedir(`/api/app/album/${id}/parecidos?k=${ctx.k}`)); } catch { setParecidos(null); } finally { setBuscando(false); }
   }
-  useEffect(() => { void buscarParecidos(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void buscarParecidos(); }, [id, ctx.k]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!datos) return <Cargando error={error} />;
   return (
     <div>
@@ -311,7 +330,7 @@ function PaginaAlbum({ id, ...ctx }: Ctx & { id: string }) {
           <p className={styles.ayuda}>Fotos reales del CD o vinilo (Discogs) o versiones modificadas de este álbum, y en qué puesto las encontró el buscador al buscar con la portada.</p>
           <div className={styles.grilla}>{parecidos.fotos.map((f) => <div key={f.imagen} className={styles.tarjetaFija}><Imagen src={f.imagen} alt={f.que_es} /><b>{f.que_es}</b><span>{f.puesto ? `encontrada en el puesto #${f.puesto}` : "no salió entre las primeras 50"}</span></div>)}</div>
         </>}
-        <h2 className={styles.titulo}>Portadas parecidas</h2>
+        <h2 className={styles.titulo}>Los <SelectorK k={ctx.k} setK={ctx.setK} /> álbumes más parecidos</h2>
         <div className={styles.grilla}>{parecidos.parecidos.map((a) => <TarjetaAlbum key={a.id} a={a} ir={ctx.ir} />)}</div>
         <ComoFunciona tecnico={parecidos.tecnico} descripcion="Cada portada se parte en cientos de puntos SIFT; cada punto se vuelve una 'palabra visual' del codebook (K-Means, 1 024 palabras) y la portada queda como un histograma TF-IDF. El HNSW encuentra los histogramas más parecidos con coseno sin revisar toda la base." />
       </>}
@@ -345,9 +364,9 @@ function PaginaCancion({ id, ...ctx }: Ctx & { id: string }) {
   useEffect(() => { lineaActiva.current?.scrollIntoView({ block: "center", behavior: "smooth" }); }, [actual]);
   async function buscarParecidas() {
     setBuscando(true);
-    try { setParecidas(await pedir(`/api/app/cancion/${id}/parecidas`)); setSinAudio(false); } catch { setParecidas(null); setSinAudio(true); } finally { setBuscando(false); }
+    try { setParecidas(await pedir(`/api/app/cancion/${id}/parecidas?k=${ctx.k}`)); setSinAudio(false); } catch { setParecidas(null); setSinAudio(true); } finally { setBuscando(false); }
   }
-  useEffect(() => { void buscarParecidas(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void buscarParecidas(); }, [id, ctx.k]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!datos) return <Cargando error={error} />;
   return (
     <div>
@@ -364,7 +383,7 @@ function PaginaCancion({ id, ...ctx }: Ctx & { id: string }) {
         </div>
       </section>
       {parecidas && <>
-        <h2 className={styles.titulo}>Suena parecido</h2>
+        <h2 className={styles.titulo}>Las <SelectorK k={ctx.k} setK={ctx.setK} /> que más suenan parecido</h2>
         <ListaCanciones canciones={parecidas.parecidas} ctx={ctx} />
         <ComoFunciona tecnico={parecidas.tecnico} descripcion="El audio se corta en ventanas de 93 ms y cada una se describe con 39 coeficientes MFCC (el timbre). Las ventanas se agrupan en 1 024 'palabras de audio' y la canción queda como un histograma TF-IDF que se busca con HNSW." />
       </>}
@@ -463,11 +482,11 @@ function PaginaReconocer(ctx: Ctx) {
   async function enviar(blob: Blob, nombre: string, deVivo: boolean) {
     const b64 = await leer64(blob);
     if (que === "cara") {
-      setCaras(await pedir<RespuestaCaras>("/api/app/reconocer-cara", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content_base64: b64, en_vivo: deVivo }) }));
+      setCaras(await pedir<RespuestaCaras>("/api/app/reconocer-cara", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content_base64: b64, en_vivo: deVivo, k: ctx.k }) }));
     } else if (fuente === "archivo") {
-      setPortada(await pedir<RespuestaPortada>("/api/app/reconocer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: nombre, content_base64: b64 }) }));
+      setPortada(await pedir<RespuestaPortada>("/api/app/reconocer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: nombre, content_base64: b64, k: ctx.k }) }));
     } else {
-      setPortada(await pedir<RespuestaPortada>("/api/app/reconocer-portada", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content_base64: b64, en_vivo: deVivo }) }));
+      setPortada(await pedir<RespuestaPortada>("/api/app/reconocer-portada", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content_base64: b64, en_vivo: deVivo, k: ctx.k }) }));
     }
   }
 
@@ -486,6 +505,10 @@ function PaginaReconocer(ctx: Ctx) {
       setCargando(false);
     }
   }
+
+  useEffect(() => {
+    if (!enVivo && fuente === "archivo" && archivo && (caras || portada)) void reconocer();
+  }, [ctx.k]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function alternarVivo() {
     if (vivo.current) { vivo.current = false; setEnVivo(false); return; }
@@ -562,7 +585,7 @@ function PaginaReconocer(ctx: Ctx) {
             <em className={cara.candidatos[0].misma_persona ? styles.insigniaOk : styles.insignia}>{cara.candidatos[0].misma_persona ? "misma persona (< 0.45)" : "se parece (≥ 0.45)"}</em>
           </span>
         </button>}
-        <span className={styles.etiqueta}>Top {cara.candidatos.length} más parecidos · HNSW, euclidiana</span>
+        <span className={styles.etiqueta}>Los <SelectorK k={ctx.k} setK={ctx.setK} /> más parecidos · HNSW, euclidiana</span>
         {recuadros.length > 1 && <p className={styles.ayuda}>Hay {recuadros.length} caras: toca un recuadro para ver su top.</p>}
         {cara.candidatos.map((m, i) => <button key={`${m.nombre}-${i}`} className={`${styles.top10Fila} ${i === 0 ? styles.top10Primero : ""}`} onClick={() => m.artista_id && ctx.ir({ tipo: "artista", id: m.artista_id })}>
           <span className={styles.top10Puesto}>{i + 1}</span>
@@ -579,7 +602,7 @@ function PaginaReconocer(ctx: Ctx) {
         <ComoFunciona tecnico={caras.tecnico} descripcion="Como en el Lab 11: face_recognition detecta cada cara y la convierte en un vector de 128 números (ResNet de dlib). El HNSW busca la cara más cercana con distancia euclidiana entre ~9 000 caras de artistas e integrantes; si la distancia es menor a 0.45 se considera la misma persona." />
       </>}
       {que === "portada" && portada && <>
-        <h2 className={styles.titulo}>{portada.tipo === "álbum" ? "¿Es alguno de estos álbumes?" : "¿Es alguna de estas canciones?"}</h2>
+        <h2 className={styles.titulo}>{portada.tipo === "álbum" ? <>Los <SelectorK k={ctx.k} setK={ctx.setK} /> álbumes más parecidos</> : <>Las <SelectorK k={ctx.k} setK={ctx.setK} /> canciones más parecidas</>}</h2>
         {portada.tipo === "álbum"
           ? <div className={styles.grilla}>{portada.resultados.map((a, i) => <TarjetaAlbum key={a.id} a={a} ir={ctx.ir} extra={i === 0 ? `${a.artista} · el más parecido` : a.artista} />)}</div>
           : <ListaCanciones canciones={portada.resultados} ctx={ctx} />}
