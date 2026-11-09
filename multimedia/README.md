@@ -250,6 +250,50 @@ Igual que en el Lab 11: ResNet de dlib vía `face_recognition`, 128 dimensiones,
 
 Sale en `faces.npz` con `embedding, path, kind, owner_id, name`. Es un vector por cara, no necesita codebook. Sirve para buscar por artista (Parte 5)
 
+### Búsqueda por cara con HNSW (`caras.py`)
+A diferencia de las portadas y el audio, acá se usa un **descriptor global**: toda la cara es un solo vector de 128 dimensiones, como en el Lab 11. No hay descriptores locales, codebook ni TF-IDF: los embeddings de `faces.npz` entran directo a nuestro HNSW (`indexes/hnsw.py`) con distancia **euclidiana**, que es la que usa `face_recognition` para su umbral de 0.6
+
+```bash
+python -m multimedia.caras foto.jpg --k 5      # quién se parece a cada cara de la foto
+python -m multimedia.caras --evaluar           # mide el índice con caras que ya están en la base
+```
+
+- El índice se guarda en `data/features/faces_hnsw.npz` la primera vez y después solo se carga
+- Una persona puede tener varias fotos: el resultado deja una fila por persona, con su cara más cercana, y marca `misma_persona` si la distancia es < 0.45 (ver abajo por qué no 0.6)
+- Si la foto tiene varias caras (una banda), busca cada una por separado
+- La primera vez construye el índice (~50 s); después cada búsqueda tarda ~1 s, casi todo en detectar la cara y sacar su embedding
+
+```
+$ python -m multimedia.caras data/artists/lady-gaga_75491/main.jpg --k 3
+cara 1 (290, 675, 675, 290):
+  0.000  Lady Gaga (artist)  artists/lady-gaga_75491/main.jpg  misma persona
+  0.537  Cat Power (artist)  artists/cat-power_1039/extra_05.jpg
+  0.541  Mariah Carey (artist)  artists/mariah-carey_65/main.jpg
+```
+
+**Cómo le va** (`--evaluar`): 8 937 caras de 2 693 personas (artistas e integrantes de bandas). Se sacan de la base 300 caras de personas que tienen 2 fotos o más y se buscan; acierta si la cara más cercana es de la misma persona, en otra foto.
+
+| | |
+|---|---|
+| Construir el HNSW (8 637 caras) | 50 s |
+| Consulta HNSW vs lineal | 1.05 ms vs 2.30 ms (2.2× más rápido) |
+| Recall@10 contra la lineal | 0.995 |
+| La persona correcta sale primera | 79 % |
+| La persona correcta está entre las 5 caras más cercanas | 92 % |
+
+**El umbral de 0.6 no sirve con tantas personas.** `face_recognition` propone 0.6 y en el Lab 11 funcionaba, pero acá la cara más cercana queda bajo 0.6 en el 100 % de las consultas, también cuando es de otra persona. Con la búsqueda exacta:
+
+| umbral | responde "misma persona" en | y acierta |
+|---|---|---|
+| 0.6 | 100 % | 79 % |
+| 0.5 | 94 % | 83 % |
+| **0.45** | **70 %** | **90 %** |
+| 0.4 | 48 % | 92 % |
+
+La mediana de la distancia es 0.39 cuando acierta y 0.46 cuando se equivoca. Se usa 0.45: responde en 7 de cada 10 consultas y acierta 9 de cada 10.
+
+Con ~9 000 caras de 128 dimensiones la lineal es rápida (2 ms), así que el HNSW gana poco; la diferencia crecería con más artistas.
+
 ## Referencias
 
 - Lowe, D. G. (2004). Distinctive image features from scale-invariant keypoints. *International Journal of Computer Vision*, 60(2), 91–110. (SIFT)
