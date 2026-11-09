@@ -136,7 +136,7 @@ Una página que explica el pipeline de la Parte 4 paso a paso **calculado en viv
 ### La app (`/musica`)
 
 Además de la consola técnica hay una **app** para usar la base como un reproductor de música:
-`http://localhost:3000/musica`, o el botón **Entrar a la app** de la consola.
+`http://localhost:3000/musica`, o el botón **chuta music** de la consola.
 
 | Pantalla | Qué hace | Qué usa por dentro |
 |---|---|---|

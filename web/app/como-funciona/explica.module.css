@@ -65,3 +65,69 @@
 .figura { margin: 8px 0; }
 .figura figcaption { margin-bottom: 3px; color: var(--muted); font: 10.5px 'IBM Plex Mono', monospace; }
 .figura .barras { margin: 0; }
+
+.bloque { margin-top: 22px; padding-top: 18px; border-top: 1px dashed var(--line); }
+.bloque h3 { margin: 0 0 6px; font-size: 18px; }
+.piramide { display: grid; grid-template-columns: 110px repeat(5, minmax(0, 1fr)); gap: 8px; align-items: center; margin: 8px 0; }
+.piramide figure { margin: 0; }
+.piramide img { width: 100%; display: block; border: 1px solid var(--line); }
+.piramide figcaption { color: var(--muted); font: 10.5px 'IBM Plex Mono', monospace; margin-top: 3px; }
+.rotulo { font: 600 11px 'IBM Plex Mono', monospace; color: var(--amber); text-transform: uppercase; }
+.dogImg { position: relative; line-height: 0; }
+.dogImg svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.dogElegida img { outline: 2px solid #c0392b; }
+.plano { width: 100%; height: auto; display: block; background: rgba(255,255,255,.45); border: 1px solid var(--line); }
+.controles { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0 10px; font-size: 14px; }
+.controles button { padding: 7px 12px; border: 1px solid var(--line); background: rgba(255,255,255,.4); font: 12px 'IBM Plex Mono', monospace; cursor: pointer; }
+.controles button:hover, .controles .activo { border-color: var(--amber); background: var(--amber-soft); }
+.controles input[type=range] { width: 260px; vertical-align: middle; accent-color: var(--amber); }
+.consultaMini { display: inline-flex; align-items: center; gap: 6px; font: 12px 'IBM Plex Mono', monospace; color: var(--muted); }
+.consultaMini img { width: 40px; height: 40px; object-fit: cover; outline: 3px solid #f1c40f; }
+.miniaturas { margin-top: 10px; }
+.miniaturas > span { display: block; margin-bottom: 4px; color: var(--muted); font: 11px 'IBM Plex Mono', monospace; }
+.miniaturas > div { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; }
+.miniaturas figure { margin: 0; }
+.miniaturas img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; border: 2px solid var(--green); }
+.noExacto img { border-color: #c0392b; opacity: .75; }
+@media (max-width: 860px) {
+  .piramide { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .rotulo { grid-column: 1 / -1; }
+  .miniaturas > div { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+.planoCapas { position: relative; }
+.planoCapas canvas { position: absolute; inset: 1px; width: calc(100% - 2px); height: calc(100% - 2px); image-rendering: auto; }
+.planoCapas .plano { position: relative; }
+
+.camino { margin-top: 12px; }
+.camino > span { display: block; margin-bottom: 6px; color: var(--amber); font: 600 11px 'IBM Plex Mono', monospace; text-transform: uppercase; }
+.camino > div { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; align-items: flex-start; }
+.camino figure { margin: 0; flex: 0 0 96px; }
+.camino figure img { width: 96px; height: 96px; object-fit: cover; display: block; border: 2px solid #c0392b; }
+.camino figcaption { font: 10px/1.3 'IBM Plex Mono', monospace; color: var(--muted); margin-top: 3px; }
+.pasoConsulta img { border-color: #f1c40f !important; }
+.pasoFinal { flex-basis: 150px !important; }
+.miniGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px; width: 96px; }
+.miniGrid img { width: 47px !important; height: 47px !important; border: 2px solid var(--green) !important; }
+.pasoTexto { flex: 1 1 360px; font-size: 14px; color: var(--ink); }
+.pulso { animation: pulso 1s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes pulso { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* diagrama de flujo clickeable */
+.diagrama { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 20px; padding: 14px; border: 1px solid var(--line); background: var(--panel); }
+.caja { display: flex; flex-direction: column; gap: 2px; min-width: 112px; max-width: 160px; padding: 9px 11px; border: 1.5px solid var(--ink); background: #fffdf7; text-align: left; cursor: pointer; transition: transform .15s, box-shadow .15s; }
+.caja:hover { transform: translateY(-2px); box-shadow: 3px 3px 0 var(--amber); }
+.caja b { font-size: 14px; }
+.caja span { color: var(--muted); font: 10.5px/1.3 'IBM Plex Mono', monospace; }
+.caja_imagen { border-color: #4363d8; }
+.caja_audio { border-color: #3cb44b; }
+.caja_indice { border-color: var(--amber); }
+.rama { display: flex; flex-direction: column; gap: 6px; padding-left: 10px; border-left: 2px solid var(--line); }
+.flecha { color: var(--amber); font-size: 20px; font-weight: 700; }
+.destello { animation: destello 1.6s ease-out; }
+@keyframes destello { 0% { box-shadow: 0 0 0 4px rgba(180,122,50,.75); } 100% { box-shadow: 0 0 0 0 rgba(180,122,50,0); } }
+.pagina section[id], .pagina div[id] { scroll-margin-top: 16px; }
+.diagrama { flex-wrap: nowrap; overflow-x: auto; gap: 4px; }
+.diagrama .caja { min-width: 92px; max-width: 150px; flex: 1 1 auto; padding: 8px 9px; }
+.diagrama .rama { flex: 1 1 auto; min-width: 120px; padding-left: 8px; }
+.diagrama .rama .caja { max-width: none; }
+.flecha { flex: none; font-size: 17px; }

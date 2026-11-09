@@ -135,3 +135,192 @@ def mfcc(track_id: str) -> dict[str, Any]:
             "mfcc": desc[::paso_v].T.round(2).tolist(), "paso_ventanas": paso_v,
             "palabras": palabras[::paso_v].tolist(), "tf": tf, "vector": vec,
             "palabras_distintas": int(len(set(palabras.tolist())))}
+
+
+# DoG: cómo encuentra SIFT los puntos clave
+
+def _png(img: np.ndarray, lado: int = 220) -> str:
+    import base64
+    h, w = img.shape[:2]
+    e = lado / max(h, w)
+    chica = cv2.resize(img, (max(1, round(w * e)), max(1, round(h * e))), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", chica, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+def dog(path: str) -> dict[str, Any]:
+    # una octava de la pirámide: la imagen borroneada con sigmas crecientes (sigma0 * 2^(i/3)) y la resta
+    # de cada par vecino (diferencia de gaussianas); los puntos clave son máximos o mínimos de la DoG
+    gris = leer_gris(str(DATA / path)).astype(np.float32)
+    sigmas = [1.6 * 2 ** (i / 3) for i in range(5)]
+    blur = [cv2.GaussianBlur(gris, (0, 0), s) for s in sigmas]
+    dogs = [blur[i + 1] - blur[i] for i in range(4)]
+    lim = max(float(np.abs(d).max()) for d in dogs) or 1
+    visual = [np.clip(128 + d / lim * 400, 0, 255).astype(np.uint8) for d in dogs]
+    # extremos de la segunda dog contra sus 26 vecinos (8 en su escala, 9 arriba y 9 abajo)
+    d0, d1, d2 = dogs[0], dogs[1], dogs[2]
+    maxf = cv2.dilate(d1, np.ones((3, 3)))
+    minf = cv2.erode(d1, np.ones((3, 3)))
+    vecinos_max = np.maximum(cv2.dilate(d0, np.ones((3, 3))), cv2.dilate(d2, np.ones((3, 3))))
+    vecinos_min = np.minimum(cv2.erode(d0, np.ones((3, 3))), cv2.erode(d2, np.ones((3, 3))))
+    umbral = 0.03 * 255
+    es_max = (d1 >= maxf) & (d1 > vecinos_max) & (d1 > umbral)
+    es_min = (d1 <= minf) & (d1 < vecinos_min) & (d1 < -umbral)
+    ys, xs = np.nonzero(es_max | es_min)
+    alto, ancho = gris.shape
+    return {"ancho": ancho, "alto": alto, "sigmas": [round(s, 2) for s in sigmas],
+            "gaussianas": [_png(b.astype(np.uint8)) for b in blur], "dogs": [_png(v) for v in visual],
+            "extremos": [[int(x), int(y)] for x, y in list(zip(xs, ys))[:400]], "n_extremos": int(len(xs))}
+
+
+# índices: una muestra de portadas reales proyectada en 2d para ver ivf y hnsw
+
+def _muestra() -> dict[str, Any]:
+    if "muestra" not in _cache:
+        from sklearn.decomposition import PCA
+        from indexes.hnsw import HNSW
+        from indexes.ivf import IVF
+        b = F.cargar_base("sift", F.K_DEFECTO, str(DATA))
+        rng = np.random.default_rng(0)
+        pos = np.sort(rng.choice(len(b["ids"]), 2000, replace=False))
+        X = b["vectores"][pos].astype(np.float32)
+        xy = PCA(2, random_state=0).fit_transform(X)
+        xy = (xy - xy.min(0)) / (xy.max(0) - xy.min(0))
+        ivf = IVF(nlist=40, metrica="coseno").entrenar(X).agregar(X)
+        celda = np.empty(len(X), int)
+        for c, ids in enumerate(ivf.listas_ids):
+            celda[ids] = c
+        # hnsw chico (300 nodos, M = 4) para que el grafo se pueda dibujar
+        chico = 300
+        hnsw = HNSW(M=4, ef_construction=40, metrica="coseno", seed=1).agregar(X[:chico])
+        _cache["muestra"] = {"ids": b["ids"][pos].astype(str), "X": X, "xy": xy, "ivf": ivf, "celda": celda,
+                             "hnsw": hnsw, "chico": chico,
+                             "centroides_xy": np.array([xy[celda == c].mean(0) if (celda == c).any() else [0.5, 0.5]
+                                                        for c in range(ivf.nlist)])}
+    return _cache["muestra"]
+
+
+def ivf(consulta: int, nprobe: int) -> dict[str, Any]:
+    from indexes.metricas import knn_exacto
+    m = _muestra()
+    X, ivf = m["X"], m["ivf"]
+    consulta = int(consulta) % len(X)
+    nprobe = max(1, min(int(nprobe), ivf.nlist))
+    q = X[consulta]
+    orden = np.argsort(ivf.metrica.distancia(q, ivf.centroides)).tolist()
+    abiertas = orden[:nprobe]
+    ids, _ = ivf.buscar(q, 11, nprobe)
+    exactos, _ = knn_exacto(q, X, 11, "coseno")
+    ids = [int(i) for i in ids if int(i) != consulta][:10]
+    exactos = [int(i) for i in exactos if int(i) != consulta][:10]
+    return {"puntos": [[round(float(x), 4), round(float(y), 4), int(c)] for (x, y), c in zip(m["xy"], m["celda"])],
+            "centroides": m["centroides_xy"].round(4).tolist(), "nlist": ivf.nlist, "consulta": consulta,
+            "orden_celdas": orden, "abiertas": abiertas, "revisados": int(ivf.candidatos),
+            "resultado": ids, "exactos": exactos, "aciertos": len(set(ids) & set(exactos)),
+            "imagenes": {str(i): m["ids"][i] for i in set(ids) | set(exactos) | {consulta}}}
+
+
+def hnsw(consulta: int) -> dict[str, Any]:
+    # la búsqueda del hnsw paso a paso: en cada nivel se avanza al vecino más cercano hasta no mejorar,
+    # y en el nivel 0 se explora con ef_search candidatos
+    import heapq
+    m = _muestra()
+    h, n = m["hnsw"], m["chico"]
+    consulta = int(consulta) % len(m["X"])
+    q = m["X"][consulta]
+    dist = lambda nodos: h.metrica.distancia(q, h.vectores[nodos])
+    ep = h.entrada
+    niveles = []
+    for l in range(h.nivel[h.entrada], 0, -1):
+        camino, visitados, mejor = [ep], set([ep]), float(dist([ep])[0])
+        while True:
+            vec = h.vecinos[ep][l]
+            visitados.update(vec)
+            if not vec:
+                break
+            dv = dist(vec)
+            i = int(np.argmin(dv))
+            if dv[i] >= mejor:
+                break
+            ep, mejor = vec[i], float(dv[i])
+            camino.append(ep)
+        niveles.append({"nivel": l, "camino": camino, "visitados": sorted(visitados)})
+    # nivel 0 con ef = 20
+    ef = 20
+    visto = {ep}
+    d0 = float(dist([ep])[0])
+    cand, mejores, orden_visita = [(d0, ep)], [(-d0, ep)], [ep]
+    while cand:
+        dc, c = heapq.heappop(cand)
+        if dc > -mejores[0][0] and len(mejores) >= ef:
+            break
+        nuevos = [x for x in h.vecinos[c][0] if x not in visto]
+        visto.update(nuevos)
+        for dn, x in zip(dist(nuevos) if nuevos else [], nuevos):
+            orden_visita.append(x)
+            if len(mejores) < ef or dn < -mejores[0][0]:
+                heapq.heappush(cand, (float(dn), x))
+                heapq.heappush(mejores, (-float(dn), x))
+                if len(mejores) > ef:
+                    heapq.heappop(mejores)
+    finales = [x for _, x in sorted((-d, x) for d, x in mejores)]
+    finales = [x for x in finales if x != consulta][:10]
+    aristas = {}
+    for l in range(max(h.nivel) + 1):
+        pares = set()
+        for nodo in range(n):
+            if h.nivel[nodo] >= l:
+                for v in h.vecinos[nodo][l]:
+                    pares.add((min(nodo, v), max(nodo, v)))
+        aristas[l] = sorted(pares)
+    xy = m["xy"][:n]
+    return {"nodos": [[round(float(x), 4), round(float(y), 4), int(lv)] for (x, y), lv in zip(xy, h.nivel)],
+            "aristas": {str(l): a for l, a in aristas.items()}, "entrada": int(h.entrada),
+            "max_nivel": int(max(h.nivel)), "consulta": consulta, "consulta_xy": m["xy"][consulta].round(4).tolist(),
+            "niveles": niveles, "nivel0_visitados": orden_visita, "resultado": finales,
+            "por_nivel": [int(sum(1 for lv in h.nivel if lv >= l)) for l in range(max(h.nivel) + 1)],
+            "imagenes": {str(i): m["ids"][i] for i in set(finales) | {consulta, int(h.entrada)}
+                         | {x for nv in niveles for x in nv["camino"]}}}
+
+
+# bolsa de palabras visuales en 2d: descriptores y centroides del codebook proyectados con pca
+
+def _espacio_palabras() -> dict[str, Any]:
+    if "palabras2d" not in _cache:
+        from sklearn.decomposition import PCA
+        b = _base("sift")
+        cb = b["cb"]
+        filas = list(csv.DictReader((DATA / "features" / "sift_covers.csv").open(newline="", encoding="utf-8")))
+        rng = np.random.default_rng(0)
+        muestra = []
+        for i in rng.choice(len(filas), 60, replace=False):
+            d = np.load(DATA / filas[i]["features_path"])
+            if len(d):
+                muestra.append(d[rng.choice(len(d), min(60, len(d)), replace=False)])
+        D = (np.vstack(muestra) - cb["media"]) / cb["desv"]          # el mismo espacio donde vive el k-means
+        pca = PCA(2, random_state=0).fit(np.vstack([D, cb["centroides"]]))
+        fondo = pca.transform(D)
+        cent = pca.transform(cb["centroides"])
+        todo = np.vstack([fondo, cent])
+        lo, hi = np.percentile(todo, 1, axis=0), np.percentile(todo, 99, axis=0)
+        norm = lambda P: np.clip((P - lo) / (hi - lo), 0, 1)
+        palabras_fondo = F.palabras(np.vstack(muestra), cb)
+        _cache["palabras2d"] = {"pca": pca, "norm": norm, "cb": cb,
+                                "fondo": [[round(float(x), 4), round(float(y), 4), int(p)]
+                                          for (x, y), p in zip(norm(fondo), palabras_fondo)],
+                                "centroides": norm(cent).round(4).tolist()}
+    return _cache["palabras2d"]
+
+
+def palabras2d(path: str) -> dict[str, Any]:
+    e = _espacio_palabras()
+    gris = leer_gris(str(DATA / path))
+    _, desc = cv2.SIFT_create(nfeatures=N_FEATURES).detectAndCompute(gris, None)
+    if desc is None:
+        raise ValueError("esta portada no tiene puntos clave")
+    desc = np.sqrt(desc / (desc.sum(axis=1, keepdims=True) + 1e-7)).astype(np.float32)
+    pal = F.palabras(desc, e["cb"])
+    P = e["norm"](e["pca"].transform((desc - e["cb"]["media"]) / e["cb"]["desv"]))
+    return {"fondo": e["fondo"], "centroides": e["centroides"],
+            "portada": [[round(float(x), 4), round(float(y), 4), int(p)] for (x, y), p in zip(P, pal)],
+            "varianza": [round(float(v), 3) for v in e["pca"].explained_variance_ratio_]}

@@ -496,6 +496,30 @@ def explica_mfcc(track: str) -> dict[str, Any]:
     return _app(explica.mfcc, track)
 
 
+@app.get("/api/explica/dog")
+def explica_dog(path: str) -> dict[str, Any]:
+    from web.backend import explica
+    return _app(explica.dog, path)
+
+
+@app.get("/api/explica/palabras2d")
+def explica_palabras2d(path: str) -> dict[str, Any]:
+    from web.backend import explica
+    return _app(explica.palabras2d, path)
+
+
+@app.get("/api/explica/ivf")
+def explica_ivf(consulta: int = 0, nprobe: int = 3) -> dict[str, Any]:
+    from web.backend import explica
+    return _app(explica.ivf, consulta, nprobe)
+
+
+@app.get("/api/explica/hnsw")
+def explica_hnsw(consulta: int = 0) -> dict[str, Any]:
+    from web.backend import explica
+    return _app(explica.hnsw, consulta)
+
+
 @app.get("/api/app/actividad")
 def app_actividad(limite: int = 100) -> dict[str, Any]:
     return {"actividad": catalogo.actividad(limite)}
