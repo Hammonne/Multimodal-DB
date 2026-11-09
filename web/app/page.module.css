@@ -63,3 +63,26 @@
 .filePreview img { width: 96px; height: 96px; object-fit: cover; border: 1px solid var(--line); }
 .filePreview audio { max-width: 260px; }
 .topKInput { width: 64px; margin-left: 6px; padding: 2px 6px; border: 1px solid var(--line); background: transparent; color: inherit; font: inherit; }
+
+/* botón para pasar de la consola a la app */
+.appButton { margin-left: 8px; padding: 6px 12px; border-radius: 999px; background: var(--ink); color: var(--paper); font: 600 12px 'IBM Plex Mono', monospace; text-decoration: none; white-space: nowrap; align-self: center; }
+.appButton:hover { background: var(--amber); color: #1a1206; }
+
+/* flechas para recorrer los ejemplos de la búsqueda multimedia */
+.paginador { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font: 11px 'IBM Plex Mono', monospace; color: var(--muted); }
+.paginador button { min-width: 34px; font-size: 16px; }
+.paginador button:disabled { opacity: .35; cursor: default; }
+
+/* búsqueda multimedia y de texto: margen interno parejo y ejemplos en una grilla sin huecos */
+.searchWorkspace .panelBody { padding: 16px 22px 22px; }
+.searchWorkspace .panelBody .queryMeta { padding-left: 0; padding-right: 0; }
+.searchWorkspace .panelBody .catalogHint { margin-left: 0; margin-right: 0; }
+.searchWorkspace input.editorInput { width: 100%; max-width: 560px; }
+.exampleChoices { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 10px; margin: 0 0 12px; }
+.exampleChoices .exampleChoice, .exampleChoices .exampleChoiceActive { min-width: 0; padding: 8px; align-items: stretch; }
+.exampleChoices .exampleThumbnail { width: 100%; height: auto; aspect-ratio: 1; }
+.exampleChoices .exampleAudio { width: 100%; }
+.exampleChoices span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paginador { justify-content: center; margin: 4px 0 16px; }
+.paginador button { min-width: 38px; height: 32px; border: 1px solid var(--line); background: rgba(255,255,255,.35); font-size: 18px; line-height: 1; }
+.paginador button:hover:not(:disabled) { border-color: var(--amber); background: var(--amber-soft); }

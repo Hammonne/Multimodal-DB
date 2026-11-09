@@ -12,8 +12,8 @@ const MapPanel = dynamic(() => import("./MapPanel"), { ssr: false });
 type Column = { name: string; type: string; position: number; primary_key: boolean };
 type TextResult = { rank: number; id: number; title: string; snippet: string; score: number; length: number | null };
 type TextSearchResponse = { results: TextResult[]; duration_ms: number; documents: number; terms: number; index_size_bytes: number; algorithm: string; dataset: string };
-type MultimediaResult = { rank: number; id: string; distance: number; is_query: boolean };
-type MultimediaResponse = { results: MultimediaResult[]; duration_ms: number; build_ms: number; documents: number; dimension: number; candidates: number; kind: string; index: string; metric: string; extract_ms?: number };
+type MultimediaResult = { rank: number; id: string; distance: number; is_query: boolean; label?: string; original?: string };
+type MultimediaResponse = { results: MultimediaResult[]; duration_ms: number; build_ms: number; documents: number; dimension: number; candidates: number; kind: string; index: string; metric: string; query_id: string; extract_ms?: number };
 type BenchmarkRow = { tipo: string; n: number; metrica: string; indice: string; construir_s: number; consulta_ms: number; recall10: number; espacio_kb: number };
 type BenchmarkQuality = { tipo: string; indice: string; metrica: string; cambio: string; recall10_original: number };
 type BenchmarkCase = { cambio: string; objetivo: number; rank: number; resultados: number[] };
@@ -29,6 +29,7 @@ type LiveTransactionStatus = { transactions: { transaction_id: number; status: s
 type TransactionDetail = { transaction_id: number; status: string; last_lsn: number; locks: { resource: string; mode: string; count: number }[]; events: { type: string; lsn: number; operation: string | null; resource: string }[] };
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const POR_PAGINA = 16;
 const starterSql = "SELECT *\nFROM ventas\nWHERE id BETWEEN 1 AND 10\nORDER BY id ASC\nLIMIT 25;";
 
 function apiErrorMessage(detail: unknown, fallback: string): string {
@@ -70,7 +71,6 @@ function TextSearchPanel() {
   const [query, setQuery] = useState("base de datos vectorial");
   const [algorithm, setAlgorithm] = useState("bm25");
   const [dataset, setDataset] = useState("1k");
-  const [topK, setTopK] = useState(10);
   const [result, setResult] = useState<TextSearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -82,7 +82,7 @@ function TextSearchPanel() {
       const response = await fetch(`${API}/api/text/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, algorithm, dataset, top_k: topK }),
+        body: JSON.stringify({ query, algorithm, dataset, top_k: 10 }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail ?? "No se pudo ejecutar la búsqueda");
@@ -125,7 +125,6 @@ function TextSearchPanel() {
           <div className={styles.queryMeta}>
             <label>Algoritmo <select value={algorithm} onChange={(event) => setAlgorithm(event.target.value)}><option value="bm25">BM25</option><option value="tfidf">TF-IDF + Coseno</option></select></label>
             <label>Dataset <select value={dataset} onChange={(event) => setDataset(event.target.value)}><option value="1k">1 000</option><option value="10k">10 000</option><option value="100k">100 000</option></select></label>
-            <label>Top-k <input className={styles.topKInput} type="number" min={1} max={100} value={topK} onChange={(event) => setTopK(limitarTopK(event.target.value))} /></label>
           </div>
           <div className={styles.queryActions}><button className={styles.secondaryButton} onClick={build} disabled={loading}><Zap size={14} /> CONSTRUIR ÍNDICE</button><button className={styles.runButton} onClick={search} disabled={loading || !query.trim()}><Play size={14} fill="currentColor" /> {loading ? "EJECUTANDO" : "BUSCAR"}</button></div>
           {message && <div className={styles.catalogHint}><AlertCircle size={15} /><span>{message}</span></div>}
@@ -149,6 +148,9 @@ function MultimediaSearchPanel() {
   const [file, setFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState("");
   const [topK, setTopK] = useState(10);
+  const [grupo, setGrupo] = useState("fotos");
+  const [pagina, setPagina] = useState(0);
+  const [totalEjemplos, setTotalEjemplos] = useState(0);
   const [result, setResult] = useState<MultimediaResponse | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -157,14 +159,16 @@ function MultimediaSearchPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API}/api/multimedia/examples?kind=${kind}`)
+    fetch(`${API}/api/multimedia/examples?kind=${kind}&offset=${pagina * POR_PAGINA}&limit=${POR_PAGINA}${kind === "sift" ? `&grupo=${grupo}` : ""}`)
       .then((response) => response.ok ? response.json() : null)
-      .then((data: { ids?: string[] } | null) => {
-        if (!cancelled) setExamples(data?.ids ?? []);
+      .then((data: { ids?: string[]; total?: number } | null) => {
+        if (!cancelled) { setExamples(data?.ids ?? []); setTotalEjemplos(data?.total ?? 0); }
       })
       .catch(() => { if (!cancelled) setExamples([]); });
     return () => { cancelled = true; };
-  }, [kind]);
+  }, [kind, grupo, pagina]);
+  useEffect(() => { setPagina(0); }, [kind, grupo]);
+  const paginas = Math.max(1, Math.ceil(totalEjemplos / POR_PAGINA));
 
   useEffect(() => {
     fetch(`${API}/api/multimedia/consultas-ejemplo`)
@@ -238,9 +242,18 @@ function MultimediaSearchPanel() {
           {file && filePreview && <div className={styles.filePreview}>{file.type.startsWith("audio") ? <audio controls src={filePreview} /> : <img src={filePreview} alt="consulta subida" />}<span>{file.name}</span></div>}
           </> : <>
           <label className={styles.eyebrow} htmlFor="multimedia-query">ELIGE UN OBJETO</label>
-          <p className={styles.helpText}>Selecciona un ID de ejemplo y busca objetos parecidos. No necesitas escribir una ruta.</p>
+          {kind === "sift" && <div className={styles.modeSwitch}>
+            {[["fotos", "Álbumes con foto CD / vinilo"], ["aumentadas", "Álbumes con imágenes aumentadas"], ["ambos", "Ambos"], ["ninguno", "Ninguno"]].map(([valor, texto]) =>
+              <button key={valor} className={grupo === valor ? styles.viewTabActive : styles.viewTab} onClick={() => { setGrupo(valor); setQueryId(""); setResult(null); }}>{texto}</button>)}
+          </div>}
+          <p className={styles.helpText}>{kind !== "sift" ? "Selecciona un ID de ejemplo y busca objetos parecidos." : ({
+            fotos: "Portadas con fotos reales de sus CDs o vinilos (Discogs) en la colección: al buscarlas salen al menos 5 de esas fotos entre los 10 primeros.",
+            aumentadas: "Portadas con versiones modificadas (rotada, espejo, blanco y negro, otros colores...): al buscarlas salen al menos 5 entre los 10 primeros.",
+            ambos: "Portadas con fotos reales y versiones modificadas: al buscarlas salen al menos 5 de ellas entre los 10 primeros.",
+            ninguno: "Portadas que solo están una vez en la colección: los vecinos son otros álbumes parecidos.",
+          } as Record<string, string>)[grupo]}</p>
           <div className={styles.exampleChoices}>
-            {examples.slice(0, 8).map((id) => {
+            {examples.map((id) => {
               const isImage = kind === "sift";
               const mediaPath = isImage ? id : `audio/${id}.mp3`;
               const mediaUrl = `${API}/api/multimedia/assets/${mediaPath}`;
@@ -250,6 +263,11 @@ function MultimediaSearchPanel() {
               </div>;
             })}
           </div>
+          {totalEjemplos > POR_PAGINA && <div className={styles.paginador}>
+            <button className={styles.viewTab} disabled={pagina === 0} onClick={() => setPagina(pagina - 1)} aria-label="página anterior">‹</button>
+            <span>página {pagina + 1} de {paginas.toLocaleString()} · {totalEjemplos.toLocaleString()} {kind === "sift" ? "portadas" : "canciones"}</span>
+            <button className={styles.viewTab} disabled={pagina + 1 >= paginas} onClick={() => setPagina(pagina + 1)} aria-label="página siguiente">›</button>
+          </div>}
           <input id="multimedia-query" className={styles.editorInput} list="multimedia-examples" placeholder={examples.length ? "También puedes escribir o pegar un ID" : "Genera primero la base multimedia"} value={queryId} onChange={(event) => setQueryId(event.target.value)} />
           <datalist id="multimedia-examples">{examples.map((id) => <option key={id} value={id} />)}</datalist>
           </>}
@@ -266,7 +284,33 @@ function MultimediaSearchPanel() {
       <section className={`${styles.panel} ${styles.resultsPanel}`}>
         <div className={styles.panelHeader}><div><span className={styles.eyebrow}>08 / NEIGHBORS</span><h2 className={styles.panelTitle}>Vecinos encontrados</h2></div><div className={styles.searchBadge}><Search size={14} /> {result ? `${result.duration_ms.toFixed(2)} ms` : "WAITING"}</div></div>
         {result && <div className={styles.queryMeta}><span>{result.index.toUpperCase()} · {result.metric} · top {result.results.length} · {result.documents} objetos · {result.dimension} dimensiones</span><span>{result.candidates} candidatos{result.extract_ms ? ` · descriptores ${result.extract_ms.toFixed(0)} ms` : ""}</span></div>}
-        <div className={styles.resultTableWrap}>{result?.results.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>#</th><th className={styles.resultHeader}>Vista previa</th><th className={styles.resultHeader}>Objeto parecido</th><th className={styles.resultHeader}>Distancia</th><th className={styles.resultHeader}>Tipo</th></tr></thead><tbody>{result.results.map((item) => { const isImage = result.kind === "sift"; const mediaPath = isImage ? item.id : `audio/${item.id}.mp3`; const preview = `${API}/api/multimedia/assets/${mediaPath}`; return <tr className={styles.resultRow} key={`${item.id}-${item.rank}`}><td className={styles.resultCell}>{item.rank}</td><td className={styles.resultCell}>{isImage ? <img className={styles.multimediaThumbnail} src={preview} alt={`Portada ${item.id}`} loading="lazy" /> : <audio className={styles.resultAudio} controls preload="none" src={preview} />}</td><td className={styles.resultCell}>{item.id}</td><td className={styles.resultCell}>{item.distance.toFixed(6)}</td><td className={styles.resultCell}>{item.is_query ? "CONSULTA" : "VECINO"}</td></tr>; })}</tbody></table> : <div className={styles.empty}><Search size={25} /><p>{mode === "archivo" ? "Sube una imagen o un audio y pulsa BUSCAR SIMILARES." : examples.length ? "Elige un ID arriba y pulsa BUSCAR SIMILARES." : "No hay una base multimedia disponible. Genera las features antes de buscar."}</p></div>}</div>
+        <div className={styles.resultTableWrap}>{result?.results.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>#</th><th className={styles.resultHeader}>Vista previa</th><th className={styles.resultHeader}>Objeto parecido</th><th className={styles.resultHeader}>Distancia</th><th className={styles.resultHeader}>Qué es</th></tr></thead><tbody>{result.results.map((item) => { const isImage = result.kind === "sift"; const mediaPath = isImage ? item.id : `audio/${item.id}.mp3`; const preview = `${API}/api/multimedia/assets/${mediaPath}`; return <tr className={styles.resultRow} key={`${item.id}-${item.rank}`}><td className={styles.resultCell}>{item.rank}</td><td className={styles.resultCell}>{isImage ? <img className={styles.multimediaThumbnail} src={preview} alt={`Portada ${item.id}`} loading="lazy" /> : <audio className={styles.resultAudio} controls preload="none" src={preview} />}</td><td className={styles.resultCell}>{item.id}</td><td className={styles.resultCell}>{item.distance.toFixed(6)}</td><td className={styles.resultCell}>{item.is_query ? "CONSULTA" : item.label && item.label !== "portada" && item.label !== "canción" ? <>{item.label}<br /><small>{item.original === result.query_id ? "del mismo álbum" : `de ${item.original}`}</small></> : "VECINO"}</td></tr>; })}</tbody></table> : <div className={styles.empty}><Search size={25} /><p>{mode === "archivo" ? "Sube una imagen o un audio y pulsa BUSCAR SIMILARES." : examples.length ? "Elige un ID arriba y pulsa BUSCAR SIMILARES." : "No hay una base multimedia disponible. Genera las features antes de buscar."}</p></div>}</div>
+      </section>
+    </div>
+  );
+}
+
+type Actividad = { hora: string; ts?: number; accion: string; titulo?: string; indice?: string; metrica?: string; descriptor?: string; sql?: string; revisados?: number; total?: number; ms?: number; resultados?: number; terminos?: string[] };
+
+function ActividadPanel() {
+  // lo que se hace en la app (/app) queda registrado en data/app_log.jsonl; se refresca cada 3 s
+  const [items, setItems] = useState<Actividad[]>([]);
+  const [filtro, setFiltro] = useState("todos");
+  useEffect(() => {
+    let vivo = true;
+    const cargar = () => fetch(`${API}/api/app/actividad?limite=150`).then((r) => r.json()).then((d) => { if (vivo) setItems(d.actividad ?? []); }).catch(() => undefined);
+    cargar();
+    const t = setInterval(cargar, 3000);
+    return () => { vivo = false; clearInterval(t); };
+  }, []);
+  const indices = ["todos", "HNSW", "ninguno"];
+  const visibles = items.filter((i) => filtro === "todos" || (i.indice ?? "").startsWith(filtro));
+  return (
+    <div className={`${styles.workspace} ${styles.searchWorkspace}`}>
+      <section className={`${styles.panel} ${styles.resultsPanel}`} style={{ gridColumn: "1 / -1" }}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>09 / APP ACTIVITY</span><h2 className={styles.panelTitle}>Actividad de la app <em className={styles.resultCount}>{visibles.length} registros</em></h2></div><a className={styles.appButton} href="/musica" target="_blank" rel="noreferrer">Abrir la app ▸</a></div>
+        <div className={styles.queryMeta}><span>Cada acción en la app muestra qué índice usó, cuánto revisó y cuánto tardó. Se actualiza solo.</span><span>{indices.map((i) => <button key={i} className={filtro === i ? styles.viewTabActive : styles.viewTab} onClick={() => setFiltro(i)}>{i}</button>)}</span></div>
+        <div className={styles.resultTableWrap}>{visibles.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>Hora</th><th className={styles.resultHeader}>Acción</th><th className={styles.resultHeader}>Índice / métrica</th><th className={styles.resultHeader}>Revisado</th><th className={styles.resultHeader}>Tiempo</th><th className={styles.resultHeader}>SQL equivalente</th></tr></thead><tbody>{visibles.map((i, n) => <tr className={styles.resultRow} key={`${i.hora}-${n}`}><td className={styles.resultCell}>{i.ts ? new Date(i.ts * 1000).toLocaleTimeString() : i.hora}</td><td className={styles.resultCell}><b>{i.accion}</b><br /><small>{i.titulo}</small></td><td className={styles.resultCell}>{i.indice}{i.metrica ? <><br /><small>{i.metrica}</small></> : null}{i.descriptor ? <><br /><small>{i.descriptor}</small></> : null}</td><td className={styles.resultCell}>{i.revisados !== undefined && i.total ? `${i.revisados.toLocaleString()} de ${i.total.toLocaleString()} (${(100 * i.revisados / i.total).toFixed(1)} %)` : i.terminos ? `términos: ${i.terminos.join(", ")}` : "—"}{i.resultados !== undefined ? <><br /><small>{i.resultados} resultados</small></> : null}</td><td className={styles.resultCell}>{i.ms !== undefined ? `${i.ms} ms` : "—"}</td><td className={styles.resultCell}><code>{i.sql}</code></td></tr>)}</tbody></table> : <div className={styles.empty}><History size={25} /><p>Todavía no hay actividad. Abre la app y navega: cada búsqueda aparece aquí.</p></div>}</div>
       </section>
     </div>
   );
@@ -347,7 +391,7 @@ export default function Home() {
   const [result, setResult] = useState<QueryResult>({ message: "Ejecuta una consulta para ver sus resultados.", columns: [], rows: [], plan: [], row_count: 0 });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<"queries" | "transactions" | "text" | "multimedia" | "benchmarks">("queries");
+  const [view, setView] = useState<"queries" | "transactions" | "text" | "multimedia" | "benchmarks" | "actividad">("queries");
   const [toast, setToast] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -626,6 +670,8 @@ export default function Home() {
           <button className={view === "multimedia" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("multimedia")}><FileBox size={14} /> Multimedia</button>
           <button className={view === "benchmarks" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("benchmarks")}><Zap size={14} /> Benchmarks</button>
           <button className={view === "transactions" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("transactions")}><LockKeyhole size={14} /> Transacciones</button>
+          <button className={view === "actividad" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("actividad")}><History size={14} /> Actividad de la app</button>
+          <a className={styles.appButton} href="/musica">Entrar a la app ▸</a>
         </nav>
         <div className={styles.status}><span className={styles.statusDot} /> STORAGE ONLINE <span className={styles.divider} /> LOCAL INSTANCE</div>
       </header>
@@ -645,6 +691,8 @@ export default function Home() {
         <TextSearchPanel />
       ) : view === "multimedia" ? (
         <MultimediaSearchPanel />
+      ) : view === "actividad" ? (
+        <ActividadPanel />
       ) : view === "benchmarks" ? (
         <BenchmarkPanel />
       ) : (
