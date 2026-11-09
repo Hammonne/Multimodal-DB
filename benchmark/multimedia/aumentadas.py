@@ -82,6 +82,30 @@ def generar(n, data=DATA, seed=0):
     return filas
 
 
+def generar_para(album_ids, archivo="aumentadas_web.csv", data=DATA):
+    # las mismas 8 versiones para álbumes elegidos (los de la web con foto real); van a otro csv
+    # para no mezclarse con las 100 del benchmark
+    import csv
+    portadas = {r["album_id"]: r for r in leer_csv(os.path.join(data, "covers.csv"))}
+    os.makedirs(os.path.join(data, CARPETA), exist_ok=True)
+    filas = []
+    for aid in album_ids:
+        p = portadas.get(aid)
+        img = cv2.imread(os.path.join(data, p["path"])) if p else None
+        if img is None:
+            continue
+        for cambio, f in CAMBIOS.items():
+            ruta = os.path.join(CARPETA, f"{aid}_{nombre_archivo(cambio)}.jpg")
+            cv2.imwrite(os.path.join(data, ruta), f(img), [cv2.IMWRITE_JPEG_QUALITY, 90])
+            filas.append({"album_id": aid, "original": p["path"], "album": p["album"],
+                          "cambio": cambio, "path": ruta})
+    with open(os.path.join(data, archivo), "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["album_id", "original", "album", "cambio", "path"])
+        w.writeheader()
+        w.writerows(filas)
+    return filas
+
+
 def evaluar(filas, data=DATA):
     base = F.cargar_base("sift", data=data)
     pos = {str(p): i for i, p in enumerate(base["ids"])}

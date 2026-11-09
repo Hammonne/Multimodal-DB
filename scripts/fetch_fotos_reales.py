@@ -3,6 +3,7 @@
 # y baja las fotos que subió la gente: la portada del objeto físico y algunas extra (contraportada, disco)
 # la respuesta correcta es la portada digital de deezer que ya está en la base
 # uso: python3 scripts/fetch_fotos_reales.py --total 250
+#      python3 scripts/fetch_fotos_reales.py --ediciones 6   (más ediciones de los álbumes que ya tienen foto)
 import argparse
 import os
 import random
@@ -32,12 +33,65 @@ def buscar_edicion(artista, album):
     return None, None
 
 
+def ediciones(artista, album, maximo):
+    # [(release, formato)] de todas las ediciones físicas del álbum, hasta maximo
+    from urllib.parse import urlencode
+    q = urlencode({"artist": artista, "release_title": album, "type": "release", "per_page": 50})
+    d = http_get(f"{API}/database/search?{q}") or {}
+    salida = []
+    for r in d.get("results", []):
+        formatos = set(r.get("format") or [])
+        if formatos & FISICOS and norm(r.get("title", "").split(" - ", 1)[-1]) == norm(album):
+            salida.append((r["id"], next(f for f in ("CD", "Vinyl", "Cassette") if f in formatos)))
+        if len(salida) >= maximo:
+            break
+    return salida
+
+
+def mas_ediciones(args):
+    # para los álbumes que ya tienen foto: la portada (foto principal) de sus otras ediciones físicas
+    salida = os.path.join(args.out, "fotos_reales.csv")
+    filas = load_csv(salida)
+    hechos_csv = os.path.join(args.out, "fotos_reales_ediciones.txt")
+    hechos = set(open(hechos_csv).read().split()) if os.path.exists(hechos_csv) else set()
+    albumes = {}
+    for f in filas:
+        albumes.setdefault(f["album_id"], f)
+    with open(hechos_csv, "a") as log:
+        for n, (aid, f) in enumerate(albumes.items(), 1):
+            if aid in hechos:
+                continue
+            ya = {x["discogs_release"] for x in filas if x["album_id"] == aid}
+            nuevas = []
+            for rid, formato in ediciones(f["artista"], f["album"], args.ediciones):
+                if str(rid) in ya:
+                    continue
+                imagenes = (http_get(f"{API}/releases/{rid}") or {}).get("images") or []
+                principal = [i for i in imagenes if i.get("type") == "primary"][:1]
+                for im in principal:
+                    path = os.path.join("fotos_reales", f"{aid}_{rid}_0.jpg")
+                    if download(im.get("uri"), os.path.join(args.out, path)):
+                        nuevas.append({**{k: f[k] for k in ("album_id", "cover_path", "artista", "album")},
+                                       "discogs_release": rid, "formato": formato, "tipo": "edicion",
+                                       "path": path, "url": im.get("uri")})
+            filas += nuevas
+            write_csv(salida, CAMPOS, filas)
+            log.write(aid + "\n")
+            log.flush()
+            print(f"[{n}/{len(albumes)}] {f['artista']} - {f['album']}: +{len(nuevas)} ediciones", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description="fotos de ediciones físicas desde discogs")
     ap.add_argument("--out", default="data")
     ap.add_argument("--total", type=int, default=250, help="álbumes con foto que se quieren")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--ediciones", type=int, default=0,
+                    help="en vez de buscar álbumes nuevos, baja hasta N ediciones de los que ya tienen foto")
     args = ap.parse_args()
+    if args.ediciones:
+        mas_ediciones(args)
+        return
 
     nombres = {r["artist_id"]: r["name"] for r in load_csv(os.path.join(args.out, "artists.csv"))}
     portadas = [r for r in load_csv(os.path.join(args.out, "covers.csv"))
