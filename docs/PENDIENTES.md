@@ -14,6 +14,22 @@ Los tests pasan, pero las fórmulas no coinciden con las de clase:
   `log((N − df + 0.5) / (df + 0.5))` sale negativo para términos que están en más de la mitad de los
   documentos; muchas implementaciones usan `log(1 + (N − df + 0.5) / (df + 0.5))` para evitarlo
 
+## Texto en "Cómo funciona" (Parte 3)
+
+La página `/como-funciona` (`web/app/como-funciona/page.tsx` y `web/backend/explica.py`) explica imágenes,
+audio, índices y caras con nuestra data. Falta una sección de texto, con el mismo estilo:
+
+1. **Tokens:** una letra de canción real partida en palabras (minúsculas, sin signos), como hace `tokenize`
+2. **SPIMI:** los documentos entrando en bloques que se escriben a disco cuando se llena la memoria, y la mezcla
+   de los bloques en un índice invertido (término → lista de documentos con su frecuencia)
+3. **Una consulta:** escribir unas palabras y ver la lista de postings de cada término, su df y su idf
+4. **El puntaje:** para los primeros resultados, cuánto aporta cada término con TF-IDF y con BM25
+   (tf, idf, largo del documento contra el promedio, k1 y b), y cómo cambia el ranking
+
+Antes conviene corregir las fórmulas de `text_based/tfidf.py` y `text_based/bm25.py` (sección siguiente), para
+no explicar un cálculo que no es el de clase. No falta calcular nada pesado: el índice SPIMI de las ~10 000
+letras se arma en unos segundos.
+
 ## Fotos reales de portadas
 
 Ya hay 250 fotos reales de CDs, vinilos y casetes de Discogs (`scripts/fetch_fotos_reales.py`) y su
