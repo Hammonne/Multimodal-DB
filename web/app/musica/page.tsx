@@ -511,10 +511,12 @@ function PaginaReconocer(ctx: Ctx) {
   }, [ctx.k]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function alternarVivo() {
-    if (vivo.current) { vivo.current = false; setEnVivo(false); return; }
+    // detener congela el video en el último cuadro (con sus recuadros); empezar lo vuelve a mover
+    if (vivo.current) { vivo.current = false; setEnVivo(false); video.current?.pause(); return; }
     vivo.current = true;
     setEnVivo(true);
     limpiar();
+    void video.current?.play();
     // un cuadro a la vez: se manda el siguiente cuando vuelve la respuesta (~1 por segundo)
     while (vivo.current) {
       const inicio = Date.now();
@@ -562,6 +564,7 @@ function PaginaReconocer(ctx: Ctx) {
         <video ref={video} playsInline muted />
         {recuadros.map((c, i) => <Recuadro key={i} c={c} ancho={caras!.ancho} alto={caras!.alto} espejo activa={recuadros.length > 1 && i === indiceCara} onClick={() => setElegida(i)} />)}
         {fuente === "vivo" && enVivo && <span className={styles.enVivo}>● EN VIVO</span>}
+        {fuente === "vivo" && !enVivo && caras && <span className={`${styles.enVivo} ${styles.pausado}`}>❚❚ PAUSADO</span>}
       </div>}
       <div className={styles.botones}>
         {fuente === "vivo"

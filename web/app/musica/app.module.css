@@ -187,3 +187,4 @@
 .selectorK::-webkit-outer-spin-button, .selectorK::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .selectorK:focus { outline: none; border-bottom-style: solid; }
 .etiqueta .selectorK { width: 2.6em; font-size: 13px; }
+.pausado { background: #3a3f45; }
