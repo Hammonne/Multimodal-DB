@@ -81,6 +81,14 @@ class TextSearchRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=100)
 
 
+class MultimediaFileSearchRequest(BaseModel):
+    index: str = Field(default="hnsw")
+    metric: str = Field(default="coseno")
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=30_000_000)
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
 class MultimediaSearchRequest(BaseModel):
     kind: str = Field(default="sift")
     index: str = Field(default="hnsw")
@@ -352,6 +360,37 @@ def search_multimedia(request: MultimediaSearchRequest) -> dict[str, Any]:
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.on_event("startup")
+def precalentar_multimedia() -> None:
+    multimedia_search.precalentar()
+
+
+@app.post("/api/multimedia/search-file")
+def search_multimedia_file(request: MultimediaFileSearchRequest) -> dict[str, Any]:
+    # la consulta es una imagen o un audio subido desde la web, no un objeto de la base
+    filename = Path(request.filename).name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in MEDIA_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="sube una imagen (jpg, png...) o un audio (mp3, wav...)")
+    try:
+        content = base64.b64decode(request.content_base64, validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="el contenido no es Base64 válido") from error
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="el archivo supera el límite de 20 MB")
+    destino = ROOT / "data" / "uploads" / "consultas"
+    destino.mkdir(parents=True, exist_ok=True)
+    seguro = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename).stem)[:80] or "consulta"
+    path = destino / f"{int(time.time() * 1000)}_{seguro}{suffix}"
+    path.write_bytes(content)
+    try:
+        return multimedia_search.search_file(path, request.index, request.metric, request.top_k)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 

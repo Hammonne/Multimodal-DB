@@ -55,3 +55,11 @@
 .exampleThumbnail { width: 72px; height: 72px; object-fit: cover; border: 1px solid var(--line); background: #e7e4d9; }
 .exampleAudio { width: 180px; max-width: 100%; }
 .resultAudio { width: 190px; max-width: 30vw; height: 32px; }
+
+/* consulta subida y top-k de la búsqueda multimedia y de texto */
+.modeSwitch { display: flex; gap: 6px; margin: 0 0 12px; }
+.fileInput { width: 100%; margin: 0 0 10px; padding: 10px; border: 1px dashed var(--line); background: transparent; color: inherit; font: 12px 'IBM Plex Mono', monospace; }
+.filePreview { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font: 11px 'IBM Plex Mono', monospace; color: var(--muted); }
+.filePreview img { width: 96px; height: 96px; object-fit: cover; border: 1px solid var(--line); }
+.filePreview audio { max-width: 260px; }
+.topKInput { width: 64px; margin-left: 6px; padding: 2px 6px; border: 1px solid var(--line); background: transparent; color: inherit; font: inherit; }

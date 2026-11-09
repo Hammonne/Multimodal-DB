@@ -13,7 +13,7 @@ type Column = { name: string; type: string; position: number; primary_key: boole
 type TextResult = { rank: number; id: number; title: string; snippet: string; score: number; length: number | null };
 type TextSearchResponse = { results: TextResult[]; duration_ms: number; documents: number; terms: number; index_size_bytes: number; algorithm: string; dataset: string };
 type MultimediaResult = { rank: number; id: string; distance: number; is_query: boolean };
-type MultimediaResponse = { results: MultimediaResult[]; duration_ms: number; build_ms: number; documents: number; dimension: number; candidates: number; kind: string; index: string; metric: string };
+type MultimediaResponse = { results: MultimediaResult[]; duration_ms: number; build_ms: number; documents: number; dimension: number; candidates: number; kind: string; index: string; metric: string; extract_ms?: number };
 type BenchmarkRow = { tipo: string; n: number; metrica: string; indice: string; construir_s: number; consulta_ms: number; recall10: number; espacio_kb: number };
 type BenchmarkQuality = { tipo: string; indice: string; metrica: string; cambio: string; recall10_original: number };
 type BenchmarkCase = { cambio: string; objetivo: number; rank: number; resultados: number[] };
@@ -51,10 +51,26 @@ function apiErrorMessage(detail: unknown, fallback: string): string {
   return fallback;
 }
 
+function limitarTopK(valor: string) {
+  const n = Math.round(Number(valor));
+  return Number.isFinite(n) ? Math.min(100, Math.max(1, n)) : 10;
+}
+
+function leerBase64(file: File) {
+  // el backend recibe el archivo en base64 dentro del json, igual que la carga de csv
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
+    reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function TextSearchPanel() {
   const [query, setQuery] = useState("base de datos vectorial");
   const [algorithm, setAlgorithm] = useState("bm25");
   const [dataset, setDataset] = useState("1k");
+  const [topK, setTopK] = useState(10);
   const [result, setResult] = useState<TextSearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -66,7 +82,7 @@ function TextSearchPanel() {
       const response = await fetch(`${API}/api/text/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, algorithm, dataset, top_k: 10 }),
+        body: JSON.stringify({ query, algorithm, dataset, top_k: topK }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail ?? "No se pudo ejecutar la búsqueda");
@@ -109,6 +125,7 @@ function TextSearchPanel() {
           <div className={styles.queryMeta}>
             <label>Algoritmo <select value={algorithm} onChange={(event) => setAlgorithm(event.target.value)}><option value="bm25">BM25</option><option value="tfidf">TF-IDF + Coseno</option></select></label>
             <label>Dataset <select value={dataset} onChange={(event) => setDataset(event.target.value)}><option value="1k">1 000</option><option value="10k">10 000</option><option value="100k">100 000</option></select></label>
+            <label>Top-k <input className={styles.topKInput} type="number" min={1} max={100} value={topK} onChange={(event) => setTopK(limitarTopK(event.target.value))} /></label>
           </div>
           <div className={styles.queryActions}><button className={styles.secondaryButton} onClick={build} disabled={loading}><Zap size={14} /> CONSTRUIR ÍNDICE</button><button className={styles.runButton} onClick={search} disabled={loading || !query.trim()}><Play size={14} fill="currentColor" /> {loading ? "EJECUTANDO" : "BUSCAR"}</button></div>
           {message && <div className={styles.catalogHint}><AlertCircle size={15} /><span>{message}</span></div>}
@@ -128,6 +145,10 @@ function MultimediaSearchPanel() {
   const [index, setIndex] = useState("hnsw");
   const [metric, setMetric] = useState("coseno");
   const [queryId, setQueryId] = useState("");
+  const [mode, setMode] = useState<"base" | "archivo">("base");
+  const [file, setFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState("");
+  const [topK, setTopK] = useState(10);
   const [result, setResult] = useState<MultimediaResponse | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -144,11 +165,26 @@ function MultimediaSearchPanel() {
     return () => { cancelled = true; };
   }, [kind]);
 
+  useEffect(() => {
+    if (!file) { setFilePreview(""); return; }
+    const url = URL.createObjectURL(file);
+    setFilePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  function elegirArchivo(nuevo: File | null) {
+    setFile(nuevo);
+    setResult(null);
+    if (nuevo) setKind(nuevo.type.startsWith("audio") ? "mfcc" : "sift");
+  }
+
   async function search() {
     setLoading(true);
     setMessage("");
     try {
-      const response = await fetch(`${API}/api/multimedia/search`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, index, metric, query_id: queryId, top_k: 10 }) });
+      const response = mode === "archivo" && file
+        ? await fetch(`${API}/api/multimedia/search-file`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ index, metric, filename: file.name, content_base64: await leerBase64(file), top_k: topK }) })
+        : await fetch(`${API}/api/multimedia/search`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, index, metric, query_id: queryId, top_k: topK }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail ?? "No se pudo ejecutar la búsqueda multimedia");
       setResult(data);
@@ -166,6 +202,16 @@ function MultimediaSearchPanel() {
       <section className={`${styles.panel} ${styles.queryPanel}`}>
         <div className={styles.panelHeader}><div><span className={styles.eyebrow}>07 / MULTIMEDIA SEARCH</span><h2 className={styles.panelTitle}>Similitud multimedia</h2></div><div className={styles.searchBadge}><Search size={14} /> k-NN</div></div>
         <div className={styles.panelBody}>
+          <div className={styles.modeSwitch}>
+            <button className={mode === "base" ? styles.viewTabActive : styles.viewTab} onClick={() => setMode("base")}>Objeto de la base</button>
+            <button className={mode === "archivo" ? styles.viewTabActive : styles.viewTab} onClick={() => setMode("archivo")}>Subir mi archivo</button>
+          </div>
+          {mode === "archivo" ? <>
+          <label className={styles.eyebrow} htmlFor="multimedia-file">TU CONSULTA</label>
+          <p className={styles.helpText}>Sube una foto de una portada (por ejemplo una foto del CD con el celular) o un fragmento de audio. Se le sacan los descriptores con el mismo codebook de la colección.</p>
+          <input id="multimedia-file" className={styles.fileInput} type="file" accept="image/*,audio/*" onChange={(event) => elegirArchivo(event.target.files?.[0] ?? null)} />
+          {file && filePreview && <div className={styles.filePreview}>{file.type.startsWith("audio") ? <audio controls src={filePreview} /> : <img src={filePreview} alt="consulta subida" />}<span>{file.name}</span></div>}
+          </> : <>
           <label className={styles.eyebrow} htmlFor="multimedia-query">ELIGE UN OBJETO</label>
           <p className={styles.helpText}>Selecciona un ID de ejemplo y busca objetos parecidos. No necesitas escribir una ruta.</p>
           <div className={styles.exampleChoices}>
@@ -181,19 +227,21 @@ function MultimediaSearchPanel() {
           </div>
           <input id="multimedia-query" className={styles.editorInput} list="multimedia-examples" placeholder={examples.length ? "También puedes escribir o pegar un ID" : "Genera primero la base multimedia"} value={queryId} onChange={(event) => setQueryId(event.target.value)} />
           <datalist id="multimedia-examples">{examples.map((id) => <option key={id} value={id} />)}</datalist>
+          </>}
           <div className={styles.queryMeta}>
-            <label>Descriptor <select value={kind} onChange={(event) => setKind(event.target.value)}><option value="sift">SIFT / imagen</option><option value="mfcc">MFCC / audio</option></select></label>
+            <label>Descriptor <select value={kind} disabled={mode === "archivo"} onChange={(event) => setKind(event.target.value)}><option value="sift">SIFT / imagen</option><option value="mfcc">MFCC / audio</option></select></label>
             <label>Índice <select value={index} onChange={(event) => setIndex(event.target.value)}><option value="hnsw">HNSW</option><option value="ivf">IVF</option></select></label>
             <label>Métrica <select value={metric} onChange={(event) => setMetric(event.target.value)}><option value="coseno">Coseno</option><option value="euclidiana">Euclidiana</option><option value="producto_punto">Producto punto</option></select></label>
+            <label>Top-k <input className={styles.topKInput} type="number" min={1} max={100} value={topK} onChange={(event) => setTopK(limitarTopK(event.target.value))} /></label>
           </div>
-          <div className={styles.queryActions}><button className={styles.runButton} onClick={search} disabled={loading || !queryId.trim()}><Play size={14} fill="currentColor" /> {loading ? "BUSCANDO..." : "BUSCAR SIMILARES"}</button></div>
+          <div className={styles.queryActions}><button className={styles.runButton} onClick={search} disabled={loading || (mode === "archivo" ? !file : !queryId.trim())}><Play size={14} fill="currentColor" /> {loading ? "BUSCANDO..." : "BUSCAR SIMILARES"}</button></div>
           {message && <div className={styles.catalogHint}><AlertCircle size={15} /><span>{message}</span></div>}
         </div>
       </section>
       <section className={`${styles.panel} ${styles.resultsPanel}`}>
         <div className={styles.panelHeader}><div><span className={styles.eyebrow}>08 / NEIGHBORS</span><h2 className={styles.panelTitle}>Vecinos encontrados</h2></div><div className={styles.searchBadge}><Search size={14} /> {result ? `${result.duration_ms.toFixed(2)} ms` : "WAITING"}</div></div>
-        {result && <div className={styles.queryMeta}><span>{result.index.toUpperCase()} · {result.metric} · {result.documents} objetos · {result.dimension} dimensiones</span><span>{result.candidates} candidatos</span></div>}
-        <div className={styles.resultTableWrap}>{result?.results.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>#</th><th className={styles.resultHeader}>Vista previa</th><th className={styles.resultHeader}>Objeto parecido</th><th className={styles.resultHeader}>Distancia</th><th className={styles.resultHeader}>Tipo</th></tr></thead><tbody>{result.results.map((item) => { const isImage = result.kind === "sift"; const mediaPath = isImage ? item.id : `audio/${item.id}.mp3`; const preview = `${API}/api/multimedia/assets/${mediaPath}`; return <tr className={styles.resultRow} key={`${item.id}-${item.rank}`}><td className={styles.resultCell}>{item.rank}</td><td className={styles.resultCell}>{isImage ? <img className={styles.multimediaThumbnail} src={preview} alt={`Portada ${item.id}`} loading="lazy" /> : <audio className={styles.resultAudio} controls preload="none" src={preview} />}</td><td className={styles.resultCell}>{item.id}</td><td className={styles.resultCell}>{item.distance.toFixed(6)}</td><td className={styles.resultCell}>{item.is_query ? "CONSULTA" : "VECINO"}</td></tr>; })}</tbody></table> : <div className={styles.empty}><Search size={25} /><p>{examples.length ? "Elige un ID arriba y pulsa BUSCAR SIMILARES." : "No hay una base multimedia disponible. Genera las features antes de buscar."}</p></div>}</div>
+        {result && <div className={styles.queryMeta}><span>{result.index.toUpperCase()} · {result.metric} · top {result.results.length} · {result.documents} objetos · {result.dimension} dimensiones</span><span>{result.candidates} candidatos{result.extract_ms ? ` · descriptores ${result.extract_ms.toFixed(0)} ms` : ""}</span></div>}
+        <div className={styles.resultTableWrap}>{result?.results.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>#</th><th className={styles.resultHeader}>Vista previa</th><th className={styles.resultHeader}>Objeto parecido</th><th className={styles.resultHeader}>Distancia</th><th className={styles.resultHeader}>Tipo</th></tr></thead><tbody>{result.results.map((item) => { const isImage = result.kind === "sift"; const mediaPath = isImage ? item.id : `audio/${item.id}.mp3`; const preview = `${API}/api/multimedia/assets/${mediaPath}`; return <tr className={styles.resultRow} key={`${item.id}-${item.rank}`}><td className={styles.resultCell}>{item.rank}</td><td className={styles.resultCell}>{isImage ? <img className={styles.multimediaThumbnail} src={preview} alt={`Portada ${item.id}`} loading="lazy" /> : <audio className={styles.resultAudio} controls preload="none" src={preview} />}</td><td className={styles.resultCell}>{item.id}</td><td className={styles.resultCell}>{item.distance.toFixed(6)}</td><td className={styles.resultCell}>{item.is_query ? "CONSULTA" : "VECINO"}</td></tr>; })}</tbody></table> : <div className={styles.empty}><Search size={25} /><p>{mode === "archivo" ? "Sube una imagen o un audio y pulsa BUSCAR SIMILARES." : examples.length ? "Elige un ID arriba y pulsa BUSCAR SIMILARES." : "No hay una base multimedia disponible. Genera las features antes de buscar."}</p></div>}</div>
       </section>
     </div>
   );
