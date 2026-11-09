@@ -90,6 +90,8 @@ class IVF:
         ivf = cls(int(z["nlist"]), str(z["metrica"]), int(z["seed"]))
         ivf.centroides = z["centroides"]
         a = z["inicios"]
-        ivf.listas_vec = [z["vectores"][a[i]:a[i + 1]] for i in range(ivf.nlist)]
-        ivf.listas_ids = [z["ids"][a[i]:a[i + 1]] for i in range(ivf.nlist)]
+        # cada z["..."] vuelve a leer el arreglo entero del archivo: se lee una vez y se corta
+        V, I = z["vectores"], z["ids"]
+        ivf.listas_vec = [V[a[i]:a[i + 1]] for i in range(ivf.nlist)]
+        ivf.listas_ids = [I[a[i]:a[i + 1]] for i in range(ivf.nlist)]
         return ivf
