@@ -119,9 +119,46 @@ cd web && npm install && cd ..
 O con Docker: `docker compose up -d --build` (monta `data/` dentro del contenedor). Después de cambiar
 código hay que volver a correrlo con `--build`, porque la imagen copia el código al construirse.
 
+### La app (`/musica`)
+
+Además de la consola técnica hay una **app** para usar la base como un reproductor de música:
+`http://localhost:3000/musica`, o el botón **Entrar a la app** de la consola.
+
+| Pantalla | Qué hace | Qué usa por dentro |
+|---|---|---|
+| Inicio | álbumes populares, lo más escuchado y artistas por género | catálogo (los CSV de `data/`) |
+| Artista | foto, integrantes con su rol, canciones populares, discografía, galería de fotos y **"se parece a…"** | catálogo + HNSW con embeddings de cara |
+| Álbum | canciones con su preview, **fotos del CD o vinilo** y **portadas parecidas** | HNSW con SIFT + TF-IDF |
+| Canción | reproductor, letra que se pinta mientras suena y **"suena parecido"** | HNSW con MFCC + TF-IDF |
+| Buscar | aún no implementado (la búsqueda por texto es la Parte 3) | — |
+| Reconocer | subes la foto de un CD o un audio y dice qué álbum o canción es | HNSW con SIFT o MFCC |
+
+- El catálogo sale de los CSV porque solo se muestra; todas las búsquedas usan nuestros índices
+  (`web/backend/app_catalogo.py`)
+- **Cada búsqueda queda registrada** en `data/app_log.jsonl`: qué índice usó, la métrica, cuántos
+  vectores revisó de cuántos, cuánto tardó y la consulta SQL equivalente. La consola lo muestra en vivo
+  en la pestaña **Actividad de la app**, y en la app el botón "Ver cómo funciona" explica cada búsqueda
+- Cada pantalla tiene su dirección (`/musica?artista=182`, `/musica?album=545417912`, `/musica?reconocer`),
+  así se puede recargar o compartir
+- **Letra pintada:** no sabemos en qué segundo de la canción empieza cada preview de 30 s de Deezer
+  (probamos estimarlo alineando la voz con los tiempos del `.lrc` y no fue confiable), así que mientras
+  suena se toca la línea que se está escuchando y desde ahí se pinta sola. El desfase se guarda por
+  canción en el navegador
+- Las ediciones de un mismo álbum (deluxe, "The Encore", "+ Acoustic Collection"...) se agrupan en una
+  tarjeta con "+N ediciones"
+- **Colaboraciones:** las canciones se bajaron como "las top de cada artista", así que en ~1 700 el nombre
+  es de otro (*I Love It* es de Kanye West pero se bajó desde Lil Pump). Se muestra "Kanye West · con Lil
+  Pump": el nombre enlaza a su perfil si existe, y "con" al artista desde el que se bajó
+
 En la pestaña **Multimedia** de la web se busca con un objeto de la base o **subiendo una imagen o un
 audio propio** (por ejemplo una foto del CD), con el top-k que se quiera (1–100). Ahí mismo hay
-ejemplos listos para probar con un clic: fotos reales de Discogs y una portada con los 8 cambios. Los índices de la web
+ejemplos listos para probar con un clic: fotos reales de Discogs y una portada con los 8 cambios.
+Además, la colección de la web incluye esas fotos (las de Discogs, con varias ediciones por álbum, y las
+versiones modificadas): al buscar una portada aparecen entre los vecinos su foto del CD o vinilo y sus
+versiones. Los ejemplos se eligen con cuatro botones: **álbumes con foto CD / vinilo**, **con imágenes
+aumentadas**, **ambos** y **ninguno**. En los tres primeros solo aparecen álbumes donde se comprobó, buscando,
+que salen al menos 5 de sus propias imágenes entre los 10 primeros vecinos (`data/features/ejemplos_web.json`). Se arman una vez con `python -m web.backend.multimedia_search`
+(`data/features/extras_sift_k1024.npz`); el benchmark sigue usando solo las 20 005 portadas. Los índices de la web
 se guardan en `data/features/indices_web/` la primera vez (el HNSW de 20k portadas tarda ~3 min en
 armarse) y al arrancar se cargan de fondo, así que las búsquedas siguientes tardan milisegundos.
 
@@ -166,7 +203,7 @@ Pruebas: `python run_all_tests.py`.
 | `multimedia/` | SIFT, MFCC, codebook y `ExtractFeatures` |
 | `benchmark/` | comparaciones de cada parte |
 | `scripts/` | descarga del dataset |
-| `web/` | backend FastAPI (`web/backend/`) y frontend Next.js (`web/app/`) |
+| `web/` | backend FastAPI (`web/backend/`), consola técnica (`web/app/page.tsx`) y app (`web/app/musica/`) |
 | `tests/` | pruebas |
 
 ### Dataset

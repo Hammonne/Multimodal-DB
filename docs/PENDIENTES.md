@@ -51,6 +51,10 @@ Hay un prototipo medido de cada uno en `docs/INVESTIGACION_PARTE5.md`. Falta:
 
 ## Más datos
 
+- **Agregar artistas puntuales:** el dataset tomó ~200 artistas por género de las radios de Deezer, así que
+  faltan algunos famosos (por ejemplo Kanye West, que solo aparece como colaborador). Habría que sumar a
+  `scripts/fetch_music.py` una opción `--artista "Nombre"` y después calcular sus MFCC, SIFT y vectores
+  con el mismo codebook (`multimedia/mfcc.py`, `multimedia/sift.py`, `python -m web.backend.multimedia_search`)
 - `scripts/fetch_covers.py --total 100000` sigue bajando portadas de los mismos artistas: ~94 000
   candidatas, ~3 h y ~32 GB. El benchmark agrega 50k y 100k solo si hay data
 - Ojo: nuestro HNSW está en Python puro. Construirlo con 100k tardaría ~15–20 min por métrica, y la
