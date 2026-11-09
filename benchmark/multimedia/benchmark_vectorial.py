@@ -362,14 +362,15 @@ def fig_consulta(r, plt):
         for nombre in ["lineal"] + INDICES:
             linea(ax, r, tipo, nombre, "consulta_ms")
         lin = en_maximo(r, tipo, "coseno", "lineal", "consulta_ms")
-        texto = [f"con N = {maximo(r, tipo):,}".replace(",", " ")]
+        texto = []
         for nombre in INDICES:
             ms = en_maximo(r, tipo, "coseno", nombre, "consulta_ms")
             veces.append(lin / ms)
-            texto.append(f"{NOMBRE[nombre]}: {lin / ms:.1f}× más rápido que la lineal")
-        ax.text(.03, .96, "\n".join(texto), transform=ax.transAxes, va="top", fontsize=8.5,
-                color=TINTA, bbox={"boxstyle": "round,pad=.4", "fc": "white", "ec": REJILLA})
-        ax.set_title(TITULO[tipo], color=TINTA, fontsize=11, loc="left")
+            texto.append(f"{NOMBRE[nombre]} {lin / ms:.1f}×")
+        # el "cuántas veces más rápido" va en el título del panel para no tapar las líneas
+        ax.set_title(f"{TITULO[tipo]}\ncon N = {maximo(r, tipo):,}: ".replace(",", " ")
+                     + " · ".join(texto) + " más rápido que la lineal",
+                     color=TINTA, fontsize=10.5, loc="left")
         ax.set_xlabel("objetos en la base (N)")
         ax.set_ylabel("ms por consulta (escala log)")
         eje_log(ax)
