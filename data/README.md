@@ -192,6 +192,22 @@ quedan como registro). Necesita `artist_types.csv`, así que va después de
 - Los previews de Deezer y las imágenes de Deezer y TheAudioDB tienen
   copyright: el dataset es solo para uso académico y no se redistribuye.
 
+## Fotos reales: fotos_reales.csv
+
+`scripts/fetch_fotos_reales.py --total 250` busca en Discogs la edición física (CD, vinilo o casete) de
+álbumes de `covers.csv` y baja las fotos que subió la gente a `fotos_reales/`. Sirven como consultas
+"tipo Google Lens" para el benchmark (`benchmark/multimedia/fotos_reales.py`).
+
+| columna | qué es |
+|---|---|
+| `album_id`, `cover_path` | el álbum y su portada digital en `covers/` (la respuesta correcta) |
+| `artista`, `album` | lo que se buscó en Discogs |
+| `discogs_release`, `formato` | la edición encontrada: CD, Vinyl o Cassette |
+| `tipo` | `principal` (la portada del objeto) o `extra` (contraportada, disco, librillo) |
+| `path`, `url` | la foto en `fotos_reales/` y de dónde se bajó |
+
+`fotos_reales_probados.txt` guarda los álbumes ya buscados, así el script sigue donde se quedó.
+
 ## Corpus textual para la demo web
 
 La pestaña **Texto** espera un archivo local `data/lyrics.jsonl`. Como los

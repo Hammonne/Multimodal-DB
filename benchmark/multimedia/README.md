@@ -173,6 +173,42 @@ Las dos consultas nuevas imitan lo que pasaría en una app de verdad:
 Las consultas difíciles fallan parecido en los cuatro: el límite ahí es el descriptor y el codebook,
 no el índice. Coseno encuentra mejor el original porque ignora el tamaño del vector.
 
+### Fotos reales de CDs y vinilos
+
+La foto simulada es una aproximación. Para probar con fotos de verdad, `scripts/fetch_fotos_reales.py`
+busca en **Discogs** la edición física (CD, vinilo o casete) de álbumes que ya están entre las 20 005
+portadas y baja las fotos que subió la gente (no necesita token). Probó 931 álbumes y 250 tenían edición
+física con fotos: 124 vinilos, 108 CDs y 18 casetes. La respuesta correcta es la portada digital de
+Deezer que ya está en la base. Se evalúa con `python -m benchmark.multimedia.fotos_reales` (vectores
+normalizados, coseno, búsqueda exacta; el HNSW da casi lo mismo, recall 0.98):
+
+| foto de Discogs | n | el original sale 1.° | en el top 10 |
+|---|---|---|---|
+| **portada del objeto físico** (foto principal) | 250 | **0.63** | **0.70** |
+| … casi idéntica a la digital (un escaneo limpio) | 33 | 0.97 | 1.00 |
+| … distinta (foto, otra luz, plástico, stickers) | 217 | 0.58 | 0.65 |
+| … de un CD | 108 | 0.69 | 0.73 |
+| … de un vinilo | 124 | 0.66 | 0.75 |
+| … de un casete | 18 | — | 0.11 |
+| fotos extra (contraportada, disco, librillo) | 409 | 0.04 | 0.04 |
+
+"Casi idéntica" = correlación > 0.9 entre las dos imágenes en gris a 32 px.
+
+![galería de fotos reales](graficas/galeria_fotos_reales.jpg)
+
+- **Las fotos reales salen mejor que la simulada** (0.65 contra 0.27 en el top 10): la simulación era
+  más dura que la realidad, con un fondo grande, un reflejo fuerte y mucha perspectiva. La gente suele
+  sacar la foto de frente y llenando el cuadro
+- **Cuando la encuentra, casi siempre es la primera** (89 % de los aciertos en las fotos distintas)
+- **Algunos errores no son del buscador:** la "foto principal" de Discogs a veces es el disco
+  transparente, una portada de otra edición con otro diseño o, en los casetes, la caja de costado. Las
+  fotos extra (contraportada, el disco) casi nunca aciertan porque no muestran la portada
+- Los errores de verdad son fotos con plástico brillante, stickers grandes o mucha sombra, que tapan
+  los puntos SIFT
+
+Las fotos (76 MB) quedan en `data/fotos_reales/` con su lista en `data/fotos_reales.csv`; no se suben
+al repo.
+
 ### Galería: aciertos y errores
 
 Consulta modificada a la izquierda y los 5 primeros resultados; borde verde = el original.
@@ -209,6 +245,8 @@ sirve para las tres métricas del `WITH METRIC`.
 | `calidad_original.png` | si sale el original de una consulta modificada |
 | `galeria_<tipo>_<índice>_<métrica>.jpg` | aciertos y errores (verde = el original) |
 | `galeria_foto_simulada.jpg` | solo las fotos simuladas, con HNSW coseno |
+| `galeria_fotos_reales.jpg` | fotos reales de Discogs, aciertos y errores |
+| `fotos_reales.json` | resultado de cada foto real |
 | `tabla.md` | todos los números con el N más grande, con las librerías |
 | `resultados.json` | todos los números |
 
@@ -226,10 +264,13 @@ El enunciado pide también 100 000 objetos. El dataset tiene 10 000 canciones y 
 - Nuevas consultas modificadas: foto simulada de la portada y fragmento grabado con celular, con su
   galería (`galeria_foto_simulada.jpg`)
 - Se volvió a correr todo con 19 800 portadas y 10 000 audios
+- Fotos reales de 250 CDs, vinilos y casetes bajadas de Discogs (`scripts/fetch_fotos_reales.py`) y
+  evaluadas con `benchmark/multimedia/fotos_reales.py`
 
 ## Referencias
 
 - Johnson, J., Douze, M. y Jégou, H. (2021). Billion-scale similarity search with GPUs. *IEEE Transactions on Big Data*, 7(3), 535–547. (Faiss)
 - Malkov, Y. A. y Yashunin, D. A. (2020). Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs. *IEEE TPAMI*, 42(4), 824–836. (HNSW y hnswlib: https://github.com/nmslib/hnswlib)
 - Jégou, H., Douze, M. y Schmid, C. (2011). Product quantization for nearest neighbor search. *IEEE TPAMI*, 33(1), 117–128. (IVF)
+- Discogs API: https://www.discogs.com/developers (fotos de las ediciones físicas)
 - Wang, A. (2003). An industrial-strength audio search algorithm. *ISMIR 2003*. (huellas de audio de Shazam)

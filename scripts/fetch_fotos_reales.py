@@ -1,0 +1,90 @@
+# fotos reales de cds y vinilos para probar la búsqueda de portadas como una app de verdad
+# busca en discogs la edición física (cd, vinilo, casete) de álbumes que ya están en covers.csv
+# y baja las fotos que subió la gente: la portada del objeto físico y algunas extra (contraportada, disco)
+# la respuesta correcta es la portada digital de deezer que ya está en la base
+# uso: python3 scripts/fetch_fotos_reales.py --total 250
+import argparse
+import os
+import random
+
+from fetch_music import THROTTLES, Throttle, download, http_get, load_csv, norm, write_csv
+
+# discogs sin token deja 25 pedidos por minuto
+THROTTLES["api.discogs.com"] = Throttle(0.4)
+THROTTLES["i.discogs.com"] = Throttle(2)
+API = "https://api.discogs.com"
+FISICOS = {"CD", "Vinyl", "Cassette"}
+CAMPOS = ["album_id", "cover_path", "artista", "album", "discogs_release", "formato",
+          "tipo", "path", "url"]
+EXTRAS = 2      # fotos secundarias por álbum, además de la principal
+
+
+def buscar_edicion(artista, album):
+    # primera edición física cuyo título coincide con el del álbum
+    from urllib.parse import urlencode
+    q = urlencode({"artist": artista, "release_title": album, "type": "release", "per_page": 15})
+    d = http_get(f"{API}/database/search?{q}") or {}
+    for r in d.get("results", []):
+        formatos = set(r.get("format") or [])
+        titulo = r.get("title", "").split(" - ", 1)[-1]
+        if formatos & FISICOS and norm(titulo) == norm(album):
+            return r["id"], next(f for f in ("CD", "Vinyl", "Cassette") if f in formatos)
+    return None, None
+
+
+def main():
+    ap = argparse.ArgumentParser(description="fotos de ediciones físicas desde discogs")
+    ap.add_argument("--out", default="data")
+    ap.add_argument("--total", type=int, default=250, help="álbumes con foto que se quieren")
+    ap.add_argument("--seed", type=int, default=0)
+    args = ap.parse_args()
+
+    nombres = {r["artist_id"]: r["name"] for r in load_csv(os.path.join(args.out, "artists.csv"))}
+    portadas = [r for r in load_csv(os.path.join(args.out, "covers.csv"))
+                if not r["duplicada_de"] and r["album"] and r["artist_id"] in nombres]
+    random.Random(args.seed).shuffle(portadas)
+
+    salida = os.path.join(args.out, "fotos_reales.csv")
+    carpeta = os.path.join(args.out, "fotos_reales")
+    os.makedirs(carpeta, exist_ok=True)
+    filas = load_csv(salida) if os.path.exists(salida) else []
+    con_foto = {f["album_id"] for f in filas}
+    probados_csv = os.path.join(args.out, "fotos_reales_probados.txt")
+    probados = set(open(probados_csv).read().split()) if os.path.exists(probados_csv) else set()
+
+    with open(probados_csv, "a") as log:
+        for p in portadas:
+            if len(con_foto) >= args.total:
+                break
+            if p["album_id"] in probados:
+                continue
+            probados.add(p["album_id"])
+            log.write(p["album_id"] + "\n")
+            log.flush()
+            artista = nombres[p["artist_id"]]
+            rid, formato = buscar_edicion(artista, p["album"])
+            if not rid:
+                continue
+            imagenes = (http_get(f"{API}/releases/{rid}") or {}).get("images") or []
+            principal = [i for i in imagenes if i.get("type") == "primary"][:1]
+            extras = [i for i in imagenes if i.get("type") == "secondary"][:EXTRAS]
+            nuevas = []
+            for n, im in enumerate(principal + extras):
+                path = os.path.join("fotos_reales", f"{p['album_id']}_{rid}_{n}.jpg")
+                if download(im.get("uri"), os.path.join(args.out, path)):
+                    nuevas.append({"album_id": p["album_id"], "cover_path": p["path"],
+                                   "artista": artista, "album": p["album"], "discogs_release": rid,
+                                   "formato": formato,
+                                   "tipo": "principal" if im.get("type") == "primary" else "extra",
+                                   "path": path, "url": im.get("uri")})
+            if any(f["tipo"] == "principal" for f in nuevas):
+                filas += nuevas
+                con_foto.add(p["album_id"])
+                write_csv(salida, CAMPOS, filas)
+                print(f"[{len(con_foto)}/{args.total}] {artista} - {p['album']} ({formato}, "
+                      f"{len(nuevas)} fotos)", flush=True)
+    print(f"{len(con_foto)} álbumes con foto de {len(probados)} probados -> {salida}")
+
+
+if __name__ == "__main__":
+    main()
