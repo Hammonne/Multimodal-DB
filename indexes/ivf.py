@@ -29,7 +29,7 @@ class IVF:
         km = KMeans(n_clusters=self.nlist, init="k-means++", n_init=1, random_state=self.seed).fit(X)
         self.centroides = km.cluster_centers_.astype(np.float32)
         self.listas_vec = [np.zeros((0, X.shape[1]), np.float32) for _ in range(self.nlist)]
-        self.listas_ids = [np.array([], dtype=object) for _ in range(self.nlist)]
+        self.listas_ids = [np.zeros(0, np.int64) for _ in range(self.nlist)]
         return self
 
     def agregar(self, X, ids=None):
@@ -39,7 +39,7 @@ class IVF:
         if X.ndim == 1:
             X = X[None]
         inicio = sum(len(l) for l in self.listas_ids)
-        ids = np.arange(inicio, inicio + len(X)) if ids is None else np.asarray(ids)
+        ids = np.arange(inicio, inicio + len(X)) if ids is None else np.asarray(ids, np.int64)
         celdas = self._celda(X)
         for c in np.unique(celdas):
             m = celdas == c
