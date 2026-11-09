@@ -98,9 +98,10 @@ Comparamos la búsqueda lineal (revisar toda la base) contra IVF y HNSW, de 1 00
 - **IVF se construye 17 veces más rápido**, ideal si la colección cambia seguido
 - **Coseno le gana a la euclidiana** sobre vectores sin normalizar: con euclidiana el recall cae a 0.80
 
-También probamos consultas como las de una app real: una foto simulada de la portada (perspectiva,
-fondo, reflejo) acierta ~1 de cada 4, y un fragmento grabado con celular no acierta nunca, porque MFCC
-no aguanta que se pierdan frecuencias. El análisis completo, con galerías de aciertos y errores y la
+También probamos consultas como las de una app real. Con **250 fotos reales de CDs y vinilos**
+bajadas de Discogs, el 70 % encuentra su portada digital en el top 10 (casi siempre primera). Un
+fragmento de audio grabado con celular, en cambio, no acierta nunca, porque MFCC no aguanta que se
+pierdan frecuencias (para eso está el prototipo de Shazam de la Parte 5). El análisis completo, con galerías de aciertos y errores y la
 comparación con Faiss y hnswlib, está en
 [`benchmark/multimedia/`](benchmark/multimedia/README.md).
 
@@ -112,6 +113,14 @@ pip install -r requirements.txt -r web/backend/requirements.txt
 cd web && npm install && cd ..
 ./run_web.sh                      # API en :8000, consola web en :3000
 ```
+
+O con Docker: `docker compose up -d --build` (monta `data/` dentro del contenedor). Después de cambiar
+código hay que volver a correrlo con `--build`, porque la imagen copia el código al construirse.
+
+En la pestaña **Multimedia** de la web se busca con un objeto de la base o **subiendo una imagen o un
+audio propio** (por ejemplo una foto del CD), con el top-k que se quiera (1–100). Los índices de la web
+se guardan en `data/features/indices_web/` la primera vez (el HNSW de 20k portadas tarda ~3 min en
+armarse) y al arrancar se cargan de fondo, así que las búsquedas siguientes tardan milisegundos.
 
 ```sql
 CREATE TABLE canciones (id INT PRIMARY KEY, titulo VARCHAR(80), artista VARCHAR(60),
@@ -140,6 +149,7 @@ Pruebas: `python run_all_tests.py`.
 | Índices vectoriales: métricas, IVF, HNSW | [`indexes/VECTOR_README.md`](indexes/VECTOR_README.md) |
 | Benchmark multimedia | [`benchmark/multimedia/README.md`](benchmark/multimedia/README.md) |
 | Dataset: fuentes, cómo se descarga, columnas | [`data/README.md`](data/README.md) |
+| Investigación para la Parte 5: Shazam y búsqueda por tarareo | [`docs/INVESTIGACION_PARTE5.md`](docs/INVESTIGACION_PARTE5.md) |
 | Lo que quedó pendiente y cómo seguir | [`docs/PENDIENTES.md`](docs/PENDIENTES.md) |
 
 ### Organización del código
@@ -207,13 +217,18 @@ python -m multimedia.features --tipo ambos --k 1024     # vectores TF-IDF de la 
 
 ### Ideas para la Parte 5
 
-1. **Shazam:** reconocer la canción grabando unos segundos aunque haya ruido, con *audio fingerprinting* (picos del espectrograma como huella de la grabación, como hace Shazam). Se puede hacer con `librosa` o ver `audfprint` / `dejavu`
-   - Hace falta: el benchmark muestra que con MFCC un fragmento grabado con celular no encuentra nunca la canción, porque el filtro del celular cambia la forma del espectro. Los picos del espectrograma sí sobreviven a eso (Wang, 2003)
-   - Encaja con lo que ya tenemos: cada par de picos se vuelve un hash y se busca en un índice invertido, como el SPIMI o el hash extensible del motor
-2. **Detector cantando (en investigación):** que alguien cante o tararee y diga qué canción es o cuál se parece más, con *query by humming*. MFCC no sirve porque ignora la melodía a propósito: hay que sacar la melodía (por ejemplo con `librosa.pyin`) y compararla sin que importe el tono ni la velocidad
-   - **Cuidado con DTW** (*Dynamic Time Warping*), que es lo primero que aparece al buscar. El profesor advirtió que **DTW no es una métrica**: no cumple la desigualdad triangular, así que no se puede meter tal cual en IVF, HNSW ni ningún índice que pode la búsqueda suponiendo una métrica, porque descartaría candidatos correctos. Además cuesta O(n·m) por comparación, y comparar contra toda la base una por una es lento
-   - Ideas por revisar: (a) filtrar primero con una cota inferior que sí se pueda indexar (LB_Keogh) y aplicar DTW solo a los pocos que quedan; (b) llevar la melodía a un vector de largo fijo (intervalos entre notas, invariante al tono) y usar coseno con los índices que ya existen; (c) n-gramas de intervalos en un índice invertido, como texto
-   - Otro problema: los previews de Deezer traen la mezcla completa (voz e instrumentos), así que primero habría que separar la voz (por ejemplo con `demucs`). Además, si el preview no incluye el coro, nadie lo va a cantar
+Hay un prototipo medido de cada una; el detalle está en [`docs/INVESTIGACION_PARTE5.md`](docs/INVESTIGACION_PARTE5.md).
+
+1. **Shazam** (`multimedia/huellas.py`): reconocer la canción grabando unos segundos. Con MFCC un
+   fragmento grabado con celular no encuentra nunca su canción, porque el filtro del celular cambia la
+   forma del espectro. Con huellas de audio (pares de picos del espectrograma como hash en un índice
+   invertido, Wang 2003) la encuentra en el **99 %** de los casos, incluso con solo 3 s, entre 2 000
+   canciones. Falta reducir el espacio (~500 MB para 2 000 canciones) y llevarlo al motor
+2. **Cantas y reconoce** (`multimedia/tarareo.py`, en investigación): la melodía se saca con `pyin` y
+   se compara sin que importe el tono. **DTW no es una métrica** (advertencia del profesor), así que no
+   puede ir en IVF/HNSW. Probamos un **híbrido**: un vector de largo fijo con coseno (que sí se indexa)
+   elige 50 candidatos y DTW solo reordena esos. Acierta lo mismo que DTW contra todo (0.86) en 8.6 ms
+   en vez de 895 ms. Ojo: el tarareo es simulado, y falta separar la voz de los instrumentos
 
 ### Referencias
 

@@ -16,15 +16,15 @@ Los tests pasan, pero las fórmulas no coinciden con las de clase:
 
 ## Fotos reales de portadas
 
-El benchmark ya prueba con **fotos simuladas**: la portada en perspectiva sobre un fondo, con tinte de
-color, reflejo, desenfoque, ruido y jpeg (`foto_simulada` en `benchmark/multimedia/benchmark_vectorial.py`).
-El paso siguiente es probar con fotos de verdad de CDs, vinilos y pósters:
+Ya hay 250 fotos reales de CDs, vinilos y casetes de Discogs (`scripts/fetch_fotos_reales.py`) y su
+evaluación (`benchmark/multimedia/fotos_reales.py`; resultados en `benchmark/multimedia/README.md`):
+el 70 % encuentra la portada digital en el top 10. Se podría:
 
-- **Discogs** es la mejor fuente: los usuarios suben fotos de sus discos físicos. La API pide un
-  token personal para bajar imágenes (https://www.discogs.com/developers) y permite 60 pedidos por
-  minuto
-- Solo sirven álbumes que ya estén entre las 20 005 portadas; si no, no hay respuesta correcta
-- Con 100–300 fotos alcanza para medir; para la demo bastan ~20
+- Quitar a mano las fotos principales que en realidad son el disco o la contraportada, para que el
+  número mida solo al buscador
+- Sumar el histograma de color (`multimedia/color.py`) a SIFT, que no ve el color
+- Bajar más: el script sigue donde se quedó (`--total 500`). Discogs sin token deja 25 pedidos por
+  minuto y solo ~1 de cada 4 álbumes tiene edición física, así que 250 tardan ~2 h
 
 ## Búsqueda por cara de artista (extra)
 
@@ -40,8 +40,14 @@ de `data/features/faces.npz` en nuestro HNSW con euclidiana y devuelve los artis
 
 ## Shazam y "cantas y reconoce" (Parte 5)
 
-Están las ideas y los cuidados en el README principal, en *Ideas para la Parte 5*. Lo más importante:
-DTW no es una métrica, así que no se puede usar tal cual con los índices.
+Hay un prototipo medido de cada uno en `docs/INVESTIGACION_PARTE5.md`. Falta:
+
+- **Shazam** (`multimedia/huellas.py`): ya acierta 99 % con audio grabado con celular. Falta bajar el
+  espacio (guardar menos picos por segundo), guardar el índice en disco y llevarlo al SQL o la web
+- **Tarareo** (`multimedia/tarareo.py`): el híbrido (vector fijo con coseno → DTW sobre 50 candidatos)
+  funciona con tarareos simulados. Falta separar la voz de la mezcla (`demucs`), probar con gente
+  cantando de verdad (dataset MIR-QBSH) y meter los vectores fijos en el HNSW. Recordar que DTW no es
+  una métrica: solo puede reordenar candidatos, nunca podar dentro del índice
 
 ## Más datos
 
