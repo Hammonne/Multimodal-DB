@@ -48,9 +48,9 @@ class MultimediaSearchManager:
         started = time.perf_counter()
         if index_name == "ivf":
             nlist = max(1, min(int(round(np.sqrt(len(X)))), len(X)))
-            index = IVF(nlist=nlist, metrica=metric).entrenar(X).agregar(X, base["ids"])
+            index = IVF(nlist=nlist, metrica=metric).entrenar(X).agregar(X)
         elif index_name == "hnsw":
-            index = HNSW(M=16, ef_construction=100, metrica=metric).agregar(X, base["ids"])
+            index = HNSW(M=16, ef_construction=100, metrica=metric).agregar(X)
         else:
             raise ValueError("índice inválido: use ivf o hnsw")
         index.build_ms = (time.perf_counter() - started) * 1000
@@ -81,13 +81,13 @@ class MultimediaSearchManager:
             result_ids, distances = index.buscar(query, top_k, nprobe=min(10, index.nlist))
         else:
             result_ids, distances = index.buscar(query, top_k, ef_search=max(50, top_k))
-        positions = {str(value): i for i, value in enumerate(ids)}
+        # el índice devuelve posiciones en la base, el id real (número o ruta) sale de ids
         results = [{
             "rank": rank,
-            "id": str(result_id),
+            "id": str(ids[int(position)]),
             "distance": float(distance),
-            "is_query": positions.get(str(result_id)) == query_position,
-        } for rank, (result_id, distance) in enumerate(zip(result_ids, distances), start=1)]
+            "is_query": int(position) == query_position,
+        } for rank, (position, distance) in enumerate(zip(result_ids, distances), start=1)]
         return {
             "kind": kind,
             "index": index_name,

@@ -32,6 +32,13 @@ hnsw.guardar("portadas.npz"); hnsw = HNSW.cargar("portadas.npz")
 `buscar` devuelve `(ids, distancias)` del más al menos parecido. `candidatos` dice cuántos vectores
 comparó la última búsqueda (con lineal serían todos).
 
+**Los ids son enteros.** Si no se pasan, cada vector recibe su posición (0, 1, 2…). Si los objetos
+tienen ids que no son números, como las rutas `covers/123.jpg` de las portadas, se agregan sin ids y
+la posición se traduce después con un arreglo aparte (`ids_reales[posicion]`). Así lo hacen el motor
+(`storage/vector_index.py`, con los RID) y la web (`web/backend/multimedia_search.py`). Si se guardan
+ids de texto, `np.load` no puede volver a leer el `.npz` sin `allow_pickle`, y `guardar()` / `cargar()`
+dejan de funcionar.
+
 ## Métricas (`metricas.py`)
 
 | Métrica | Similitud | Distancia que usan los índices | Alias en SQL |
