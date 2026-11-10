@@ -44,7 +44,8 @@ Ya hecho en `avances-y-correcciones`, falta revisarlo y traerlo:
   una fila, y *embeddings* de redes neuronales (CLIP, PANNs) como modo extra
 - **Filtro con índice:** para saber qué filas cumplen el filtro se recorre la tabla; se podría usar el B+ o el
   bitmap de la columna filtrada
-- **Probar la consola web en Docker** subiendo un `.zip` (ver la sección SQL del README)
+- **Consola web con `.zip`:** probado contra el backend de Docker (subir, crear la tabla, importar, indexar
+  y buscar). Falta probarlo haciendo clic en el navegador
 
 ## Revisar en la Parte 3 (texto)
 

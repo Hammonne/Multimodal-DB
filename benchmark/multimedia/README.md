@@ -341,7 +341,7 @@ sirve para las tres métricas del `WITH METRIC`.
 | `resultados.json` | todos los números |
 
 El enunciado pide también 100 000 objetos. El dataset tiene 10 000 canciones y 20 005 portadas
-(`covers.csv`), así que llega a 10k en audio y ~20k en imágenes. Si se bajan más portadas con
+(`covers.csv`), así que llega a 10k en audio y ~20k en imágenes; el profesor aceptó llegar hasta ahí. Si se bajan más portadas con
 `scripts/fetch_covers.py --total 100000`, el script sigue solo a 50k y 100k.
 
 ## Cambios del 9 de noviembre
@@ -356,6 +356,17 @@ El enunciado pide también 100 000 objetos. El dataset tiene 10 000 canciones y 
 - Fotos reales de 600 CDs, vinilos y casetes (3 409 fotos) bajadas de Discogs (`scripts/fetch_fotos_reales.py`) y
   evaluadas con `benchmark/multimedia/fotos_reales.py`
 - Data augmentation de 100 portadas sin foto real con 8 cambios (`benchmark/multimedia/aumentadas.py`)
+- Benchmark por SQL sobre cualquier carpeta, con columnas `IMAGE`/`AUDIO` que entrenan su propio codebook
+  (`benchmark_sql.py`, resultados en `sql/`)
+
+## Cambios del 10 de noviembre (motor)
+
+No cambian los números de arriba, que miden los índices directamente:
+
+- Sin `USING` se usa el índice de la tabla (antes iba lineal) y `USING SEQ` fuerza la búsqueda exacta;
+  `benchmark_sql.py` ahora pide la lineal con `USING SEQ`
+- `SIMILAR_TO` con filtros, `WITH NPROBE` / `EF_SEARCH` y `SIMILAR_TO` con `JOIN` y `GROUP BY`, con sus
+  mediciones en [`docs/BASE_VECTORIAL.md`](../../docs/BASE_VECTORIAL.md)
 
 ## Referencias
 
