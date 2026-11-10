@@ -37,6 +37,13 @@ Ya hecho en `avances-y-correcciones`, falta revisarlo y traerlo:
   muchos archivos distintos, el codebook queda viejo. Se podría reentrenar cuando la tabla crece, por
   ejemplo, al doble
 - **Alias de tabla:** el parser no acepta `FROM fotos f`; hay que usar el nombre completo
+- **Base vectorial frente a gestores reales:** ya se agregaron la búsqueda con filtro, `WITH NPROBE` /
+  `EF_SEARCH` y `SIMILAR_TO` con `JOIN` y `GROUP BY`. Lo que falta, con cómo lo resuelven pgvector, Qdrant,
+  Weaviate y Milvus, está en [`BASE_VECTORIAL.md`](BASE_VECTORIAL.md): compactar los borrados del índice,
+  reentrenar el codebook, `SIMILAR_TO` en un `OR` o dos a la vez (búsqueda híbrida), buscar con un vector o
+  una fila, y *embeddings* de redes neuronales (CLIP, PANNs) como modo extra
+- **Filtro con índice:** para saber qué filas cumplen el filtro se recorre la tabla; se podría usar el B+ o el
+  bitmap de la columna filtrada
 - **Probar la consola web en Docker** subiendo un `.zip` (ver la sección SQL del README)
 
 ## Revisar en la Parte 3 (texto)

@@ -145,6 +145,7 @@ Pruebas: `python run_all_tests.py`.
 | Texto: SPIMI, TF-IDF, BM25 (Parte 3) | [`docs/SPIMI.md`](docs/SPIMI.md) |
 | Multimedia: SIFT, MFCC, codebook, TF-IDF (Parte 4) | [`multimedia/README.md`](multimedia/README.md) |
 | Índices vectoriales: métricas, IVF, HNSW | [`indexes/VECTOR_README.md`](indexes/VECTOR_README.md) |
+| chutaDB frente a gestores vectoriales reales, con fuentes | [`docs/BASE_VECTORIAL.md`](docs/BASE_VECTORIAL.md) |
 | Benchmark multimedia | [`benchmark/multimedia/README.md`](benchmark/multimedia/README.md) |
 | Dataset: fuentes, cómo se descarga, columnas | [`data/README.md`](data/README.md) |
 
@@ -178,7 +179,9 @@ Pruebas: `python run_all_tests.py`.
 Tipo       ::= ... | IMAGE | AUDIO
 Import     ::= IMPORT INTO id FROM ( 'archivo.csv' | 'carpeta/' )
 SimilarTo  ::= SIMILAR_TO ( 'ruta' , [k =] num )
-UsingVec   ::= USING (IVF | HNSW | SEQ) [WITH METRIC = (cosine | euclidean | dot)]
+UsingVec   ::= USING (IVF | HNSW | SEQ) [WithVec] | WithVec
+WithVec    ::= WITH OptVec {, OptVec}*
+OptVec     ::= METRIC = (cosine | euclidean | dot) | NPROBE = num | EF_SEARCH = num
 Proj       ::= ... | SIMILARITY_SCORE ( ) [AS id]
 CreateIdx  ::= CREATE INDEX ON id ( columna ) USING (IVF | HNSW)
 ```
@@ -230,8 +233,25 @@ Los resultados quedan en `benchmark/multimedia/sql/` (ver
   no tiene, búsqueda lineal. `USING SEQ` (o `LINEAL`) fuerza la búsqueda lineal exacta aunque haya
   índice. Sin `WITH METRIC` se usa coseno
 - `SIMILARITY_SCORE()`: mayor = más parecido. Coseno y dot dan la similitud, euclidean da 1 / (1 + d)
-- Se combina con otras condiciones con `AND` y con `LIMIT`. No va dentro de un `OR`, con `JOIN` ni
-  con agregaciones
+- **Filtros:** con otras condiciones en el `AND`, primero se ve qué filas cumplen. Si son 2 000 o menos se
+  comparan todas (pre-filtro exacto); si son más, se busca en el índice saltando las que no cumplen. Siempre
+  salen k filas si existen. `EXPLAIN` dice qué estrategia usó
+- **Parámetros:** `WITH NPROBE = n` (IVF, celdas que se abren) y `WITH EF_SEARCH = n` (HNSW), como
+  `ivfflat.probes` y `hnsw.ef_search` de pgvector. Más alto = más preciso y más lento
+- **`JOIN` y `GROUP BY`:** `SIMILAR_TO` se combina con un `JOIN` (la columna de imagen o audio puede estar
+  en cualquiera de las dos tablas) y con `GROUP BY` / `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` sobre las k filas
+  más parecidas. No va dentro de un `OR` ni dos veces en la misma consulta
+
+```sql
+SELECT canciones.titulo, artistas.nombre, SIMILARITY_SCORE() AS score
+    FROM canciones JOIN artistas ON canciones.id_artista = artistas.id
+    WHERE artistas.genero = 'Rock' AND SIMILAR_TO('consulta.mp3', k=5) WITH EF_SEARCH = 100;
+
+SELECT genero, COUNT(*) AS n FROM canciones WHERE SIMILAR_TO('foto.jpg', k=20) GROUP BY genero;
+```
+
+Cómo se compara esto con pgvector, Qdrant, Weaviate, Milvus y Faiss, qué falta y por qué *embeddings*
+de redes neuronales serían mejores que SIFT/MFCC: [`docs/BASE_VECTORIAL.md`](docs/BASE_VECTORIAL.md).
 
 ```
 EXPLAIN ANALYZE SELECT titulo, SIMILARITY_SCORE() AS score FROM canciones

@@ -188,6 +188,30 @@ Sin índice, la búsqueda lineal sobre una columna `IMAGE`/`AUDIO` entrena el mi
 y lo deja en memoria mientras la tabla no cambie. Los descriptores de cada archivo se guardan en una
 caché, así la lineal, el IVF y el HNSW no los vuelven a calcular.
 
+Con índice, `USING SEQ` compara contra **todos los vectores del índice** (con su mismo modelo), así es la
+respuesta exacta de lo que el índice aproxima.
+
+### Búsqueda con filtro
+
+`SIMILAR_TO` con otras condiciones en el `AND` (`WHERE genero = 'Rock' AND SIMILAR_TO(...)`):
+
+1. Se evalúa el resto del `WHERE` sobre la tabla y se arma el conjunto de filas que cumplen
+2. **Pre-filtro exacto** si cumplen 2 000 filas o menos (`UMBRAL_PREFILTRO`): se comparan solo esos vectores
+   (`VectorSecondaryIndex.exacto`)
+3. **Filtro dentro del índice** si cumplen más (`knn(..., rids_permitidos=...)`):
+   - HNSW: `buscar(q, k, ef_search, permitido)`. En el nivel 0 el grafo se recorre igual, pero solo los nodos
+     permitidos entran a la lista de resultados; los demás siguen sirviendo de puente (como hnswlib y Qdrant)
+   - IVF: `buscar(q, k, nprobe, permitido)`. Solo se comparan los permitidos de cada celda; si el filtro deja
+     una fracción *f*, se abren `nprobe / f` celdas, y si aun así no hay k se siguen abriendo
+
+Con 1 000 portadas y un filtro que deja el 5 % de las filas, el HNSW y el IVF filtrados dan recall@10 = 1.0.
+Detalle, números y cómo lo hacen otros gestores en [`docs/BASE_VECTORIAL.md`](../docs/BASE_VECTORIAL.md).
+
+### Parámetros desde SQL
+
+`WITH NPROBE = n` (IVF) y `WITH EF_SEARCH = n` (HNSW) cambian los valores por defecto (10 y 50) solo para esa
+consulta, como `SET ivfflat.probes` y `SET hnsw.ef_search` en pgvector. `EXPLAIN` los muestra.
+
 La sintaxis SQL está en el [README principal](../README.md#sql-de-la-parte-4).
 
 ## Referencias
