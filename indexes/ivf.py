@@ -47,11 +47,34 @@ class IVF:
             self.listas_ids[c] = np.concatenate([self.listas_ids[c], ids[m]])
         return self
 
-    def _buscar_uno(self, q, k, nprobe):
+    def _buscar_uno(self, q, k, nprobe, permitido=None):
         d_c = self.metrica.distancia(q, self.centroides)
-        abiertas = np.argsort(d_c)[:min(nprobe, self.nlist)]
-        V = np.vstack([self.listas_vec[c] for c in abiertas])
-        I = np.concatenate([self.listas_ids[c] for c in abiertas])
+        orden = np.argsort(d_c)
+        if permitido is None:
+            abiertas = orden[:min(nprobe, self.nlist)]
+            V = np.vstack([self.listas_vec[c] for c in abiertas])
+            I = np.concatenate([self.listas_ids[c] for c in abiertas])
+        else:
+            # búsqueda filtrada: se abren las nprobe celdas más cercanas y, si entre ellas no hay k
+            # vectores que cumplan el filtro, se siguen abriendo celdas (como el iterative scan de pgvector)
+            permitidos = np.fromiter(permitido, np.int64, len(permitido))
+            # si el filtro deja una fracción f de los vectores, cada celda tiene f veces menos candidatos:
+            # se abren nprobe / f celdas para revisar más o menos la misma cantidad que sin filtro
+            fraccion = max(len(permitidos) / max(len(self), 1), 1e-9)
+            nprobe = min(self.nlist, int(np.ceil(nprobe / fraccion)))
+            Vs, Is, hay, abiertas = [], [], 0, 0
+            for c in orden:
+                if abiertas >= nprobe and hay >= k:
+                    break
+                abiertas += 1
+                m = np.isin(self.listas_ids[c], permitidos)
+                if m.any():
+                    Vs.append(self.listas_vec[c][m])
+                    Is.append(self.listas_ids[c][m])
+                    hay += int(m.sum())
+            if not Is:
+                return np.zeros(0, np.int64), np.zeros(0, np.float32)
+            V, I = np.vstack(Vs), np.concatenate(Is)
         self.candidatos += len(I)
         if len(I) == 0:
             return np.zeros(0, np.int64), np.zeros(0, np.float32)
@@ -61,15 +84,16 @@ class IVF:
         top = top[np.argsort(d[top], kind="stable")]
         return I[top], d[top]
 
-    def buscar(self, q, k=10, nprobe=10):
+    def buscar(self, q, k=10, nprobe=10, permitido=None):
         # (ids, distancias) ordenados de más a menos parecido, menor distancia = más parecido
+        # permitido: set de ids que pueden salir en el resultado (búsqueda con filtro); None = todos
         if self.centroides is None:
             raise RuntimeError("primero entrenar() y agregar()")
         q = np.asarray(q, np.float32)
         self.candidatos = 0
         if q.ndim == 1:
-            return self._buscar_uno(q, k, nprobe)
-        res = [self._buscar_uno(x, k, nprobe) for x in q]
+            return self._buscar_uno(q, k, nprobe, permitido)
+        res = [self._buscar_uno(x, k, nprobe, permitido) for x in q]
         return [r[0] for r in res], [r[1] for r in res]
 
     def __len__(self):

@@ -224,18 +224,55 @@ class VectorSecondaryIndex:
     def __len__(self):
         return len(self.rids) - len(self.borrados) + len(self.pendientes) + len(self.pendientes_media)
 
-    def knn(self, q, k, nprobe=10, ef_search=50):
+    def _ids_de(self, rids_permitidos):
+        # posiciones internas (vigentes) de un conjunto de RIDs
+        return {i for i, r in enumerate(self.rids) if r in rids_permitidos and i not in self.borrados}
+
+    def exacto(self, q, k, rids_permitidos):
+        # [(rid, vector)] de los k más parecidos entre las filas permitidas, comparando con todas
+        # (pre-filtro: lo que hacen qdrant o weaviate cuando el filtro deja pocas filas)
+        if self.modelo is not None and self.pendientes_media:
+            self._entrenar_media()
+        if self.indice is None:
+            pares = [(v, r) for v, r in self.pendientes if r in rids_permitidos]
+        else:
+            ids = self._ids_de(rids_permitidos)
+            if self.tipo_indice == "ivf":
+                V = np.vstack(self.indice.listas_vec)
+                I = np.concatenate(self.indice.listas_ids)
+                m = np.isin(I, np.fromiter(ids, np.int64, len(ids)))
+                pares = [(v, self.rids[int(i)]) for v, i in zip(V[m], I[m])]
+            else:
+                pares = [(self.indice.vectores[i], self.rids[i]) for i in sorted(ids)]
+        self.candidatos = len(pares)
+        if not pares:
+            return []
+        X = np.vstack([v for v, _ in pares])
+        orden = np.argsort(get_metrica(METRICA_INDICE).distancia(q, X), kind="stable")[:k]
+        return [(pares[i][1], pares[i][0]) for i in orden]
+
+    def knn(self, q, k, nprobe=10, ef_search=50, rids_permitidos=None):
         # [(rid, vector)] de los k más parecidos, del más al menos parecido
+        # rids_permitidos: solo esas filas pueden salir (búsqueda filtrada dentro del índice)
         if self.modelo is not None and self.pendientes_media:
             self._entrenar_media()
         self.candidatos = 0
         if self.indice is None:
-            if not self.pendientes:
+            pares = [p for p in self.pendientes if rids_permitidos is None or p[1] in rids_permitidos]
+            if not pares:
                 return []
-            X = np.vstack([p[0] for p in self.pendientes])
+            X = np.vstack([p[0] for p in pares])
             orden = np.argsort(get_metrica(METRICA_INDICE).distancia(q, X), kind="stable")
             self.candidatos = len(X)
-            return [(self.pendientes[i][1], self.pendientes[i][0]) for i in orden[:k]]
+            return [(pares[i][1], pares[i][0]) for i in orden[:k]]
+        if rids_permitidos is not None:
+            permitido = self._ids_de(rids_permitidos)
+            if self.tipo_indice == "ivf":
+                ids, _ = self.indice.buscar(q, k, nprobe, permitido)
+            else:
+                ids, _ = self.indice.buscar(q, k, max(ef_search, k), permitido)
+            self.candidatos = self.indice.candidatos
+            return [(self.rids[int(i)], self.vector(int(i))) for i in ids]
         pedir = k + len(self.borrados)
         if self.tipo_indice == "ivf":
             ids, _ = self.indice.buscar(q, pedir, nprobe)
