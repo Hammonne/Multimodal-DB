@@ -16,6 +16,7 @@ import sys
 import os
 import csv
 import json
+import copy
 import math
 import time
 from contextlib import contextmanager
@@ -67,6 +68,12 @@ from text_based.tfidf import TFIDFCosine
 
 EXTERNAL_SORT_BUDGET = 1000
 EXTERNAL_HASH_BUCKETS = 16
+# SIMILAR_TO con un filtro: si quedan pocas filas se comparan todas (pre-filtro exacto, como el
+# full_scan_threshold de qdrant o el flatSearchCutoff de weaviate); si quedan muchas se busca en el
+# índice saltando las que no cumplen (búsqueda filtrada)
+UMBRAL_PREFILTRO = 2000
+NPROBE_DEFECTO = 10          # ivf: celdas que se abren (WITH NPROBE=)
+EF_SEARCH_DEFECTO = 50       # hnsw: tamaño de la lista de candidatos (WITH EF_SEARCH=)
 TEXT_INDEX_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "text_indexes"))
 
 
@@ -626,10 +633,9 @@ class ExecuteVisitor(Visitor):
                 f"USING {pedido.name}"
             )
         if vectoriales:
-            if pedido == VectorIndex.LINEAL:
-                # USING SEQ: la columna del índice, pero recorriendo todo (la respuesta exacta)
-                return vectoriales[0][0], None
-            # sin USING: el índice de la tabla, primero HNSW (mejor recall) y si no IVF
+            # sin USING: el índice de la tabla, primero HNSW (mejor recall) y si no IVF.
+            # USING SEQ también devuelve el índice, pero se recorren todos sus vectores (la respuesta
+            # exacta con el mismo modelo que usa el índice); ver _candidatos_similares
             vectoriales.sort(key=lambda par: par[1].tipo_indice != "hnsw")
             return vectoriales[0]
 
@@ -692,32 +698,63 @@ class ExecuteVisitor(Visitor):
         k, metrica = similar.k, stm.metrica_vectorial
         filtro = stm.condicion if stm.condicion is not similar else None
 
+        if indice is not None and stm.indice_vectorial == VectorIndex.LINEAL:
+            # USING SEQ con índice: se comparan todos los vectores del índice (respuesta exacta)
+            entrada = {"node": "VECTOR SEQ SCAN", "table": tabla.name, "operation": "vector_scan",
+                       "column": tabla.column_names[pos], "k": k, "metric": metrica}
+            self.plan.append(entrada)
+            todos = []
+            with self._medir(entrada) as medida:
+                for rid, v in indice.todos():
+                    registro = tabla.get(rid)
+                    if registro is None:
+                        continue
+                    if filtro is not None and not self._evaluar(filtro, registro, resolver):
+                        medida.descartada()
+                        continue
+                    medida.emitida()
+                    todos.append((registro, score_similitud(metrica, q, v)))
+            entrada["candidates"] = len(todos)
+            todos.sort(key=lambda par: -par[1])
+            return todos[:k]
+
         if indice is not None:
+            nprobe = getattr(stm, "nprobe", None) or NPROBE_DEFECTO
+            ef = getattr(stm, "ef_search", None) or EF_SEARCH_DEFECTO
             entrada = {"node": "VECTOR INDEX SCAN", "table": tabla.name,
                        "operation": "vector_index_scan", "index": indice.tipo_indice,
                        "column": tabla.column_names[pos], "k": k, "metric": metrica}
+            if indice.tipo_indice == "ivf":
+                entrada["nprobe"] = nprobe
+            else:
+                entrada["ef_search"] = ef
             self.plan.append(entrada)
-            salida, vistos, pedidos = [], set(), k
+            salida = []
             with self._medir(entrada) as medida:
-                while len(salida) < k:
-                    vecinos = indice.knn(q, pedidos)
-                    for rid, v in vecinos:
-                        if rid in vistos:
-                            continue
-                        vistos.add(rid)
+                if filtro is None:
+                    for rid, v in indice.knn(q, k, nprobe, ef):
                         registro = tabla.get(rid)
-                        if registro is None:
-                            continue
-                        if filtro is None or self._evaluar(filtro, registro, resolver):
+                        if registro is not None:
                             medida.emitida()
                             salida.append((registro, score_similitud(metrica, q, v)))
-                            if len(salida) == k:
-                                break
+                else:
+                    # primero el filtro relacional (qué filas cumplen el resto del WHERE) y después
+                    # la búsqueda solo entre esas: así siempre salen k filas si existen
+                    registros = {}
+                    for rid, registro in tabla.scan():
+                        if self._evaluar(filtro, registro, resolver):
+                            registros[rid] = registro
                         else:
                             medida.descartada()
-                    if len(vecinos) < pedidos:
-                        break
-                    pedidos *= 2
+                    if len(registros) <= UMBRAL_PREFILTRO:
+                        entrada["strategy"] = f"pre-filtro exacto ({len(registros)} filas cumplen)"
+                        vecinos = indice.exacto(q, k, registros)
+                    else:
+                        entrada["strategy"] = f"filtro dentro del indice ({len(registros)} filas cumplen)"
+                        vecinos = indice.knn(q, k, nprobe, ef, rids_permitidos=registros)
+                    for rid, v in vecinos:
+                        medida.emitida()
+                        salida.append((registros[rid], score_similitud(metrica, q, v)))
             entrada["candidates"] = indice.candidatos
             return salida
 
@@ -756,18 +793,140 @@ class ExecuteVisitor(Visitor):
         return todos[:k]
 
     def _select_similitud(self, tabla, stm, similar):
-        if stm.join is not None:
-            raise ExecutionError("SIMILAR_TO no se puede combinar con JOIN")
-        if self._tiene_agregados(stm):
-            raise ExecutionError("SIMILAR_TO no se puede combinar con agregaciones")
-
         self.plan = [{"node": "SELECT", "table": stm.tabla, "operation": "project"}]
-        resolver = self._resolver_columnas([(stm.tabla, tabla)])
+        if stm.join is not None:
+            self._select_similitud_join(tabla, stm, similar)
+            return
+
+        tablas = [(stm.tabla, tabla)]
+        resolver = self._resolver_columnas(tablas)
         t_plan = time.perf_counter()
         pos, indice = self._plan_similitud(tabla, stm, similar)
         self._planning_ms += (time.perf_counter() - t_plan) * 1000.0
         q = self._vector_consulta(similar, tabla, pos, indice)
         pares = self._candidatos_similares(tabla, stm, similar, pos, indice, q, resolver)
+        self._salida_similitud(stm, pares, tablas, resolver, tabla.data_file.serializer)
+
+    def _lado_similitud(self, tablas, stm, similar):
+        # con JOIN: la tabla que tiene la columna de imágenes o audios (primero la del FROM)
+        primer_error = None
+        for lado, (_, t) in enumerate(tablas):
+            try:
+                pos, indice = self._plan_similitud(t, stm, similar)
+                return lado, pos, indice
+            except ExecutionError as e:
+                primer_error = primer_error or e
+        raise primer_error
+
+    @staticmethod
+    def _columnas_de(cond):
+        # todas las ColRef de una condición (para saber a qué tabla se refiere)
+        # solo se recorren nodos del AST (clases de ast_sql) y listas, marcando lo visitado
+        vistas, pila, visitados = [], [cond], set()
+        while pila:
+            x = pila.pop()
+            if id(x) in visitados:
+                continue
+            visitados.add(id(x))
+            if isinstance(x, ColRef):
+                vistas.append(x)
+            elif isinstance(x, (list, tuple)):
+                pila.extend(x)
+            elif type(x).__module__ == ColRef.__module__ and hasattr(x, "__dict__"):
+                pila.extend(vars(x).values())
+        return vistas
+
+    def _select_similitud_join(self, izquierda, stm, similar):
+        # SIMILAR_TO + JOIN: los k pares (fila parecida, fila unida) más parecidos que cumplen el WHERE.
+        # Las condiciones que solo miran la tabla con la imagen o el audio se aplican antes de buscar
+        # (como un filtro normal de SIMILAR_TO); las que miran la otra tabla, después de unir. Si después
+        # de unir faltan filas se piden el doble de vecinos, hasta completar k
+        derecha = self._abrir(stm.join.tabla)
+        tablas = [(stm.tabla, izquierda), (stm.join.tabla, derecha)]
+        resolver = self._resolver_columnas(tablas)
+        t_plan = time.perf_counter()
+        lado, pos, indice = self._lado_similitud(tablas, stm, similar)
+        self._planning_ms += (time.perf_counter() - t_plan) * 1000.0
+        nombre_v, tabla_v = tablas[lado]
+        nombre_o, tabla_o = tablas[1 - lado]
+        ancho_izq = len(izquierda.schema)
+        rango_v = range(0, ancho_izq) if lado == 0 else range(ancho_izq, ancho_izq + len(derecha.schema))
+
+        # columnas del ON de cada lado
+        col_izq, col_der = stm.join.izquierda, stm.join.derecha
+        for col, t in ((col_izq, izquierda), (col_der, derecha)):
+            if col.tabla and col.tabla != t.name:
+                raise ExecutionError(f"el ON debe comparar {izquierda.name}.columna = {derecha.name}.columna")
+        pos_on = (izquierda.column_index(col_izq.columna), derecha.column_index(col_der.columna))
+
+        # condiciones que se pueden aplicar antes de unir (solo columnas de la tabla con la imagen/audio)
+        conjuntos = (stm.condicion.condiciones if isinstance(stm.condicion, AndCond) else [stm.condicion])
+        locales = [c for c in conjuntos if c is not similar and c is not None and
+                   all(resolver(col) in rango_v for col in self._columnas_de(c))]
+        resolver_v = self._resolver_columnas([(nombre_v, tabla_v)])
+
+        # hash de la otra tabla por la columna del ON
+        self.plan.append({"node": "HASH JOIN", "table": nombre_o, "operation": "join"})
+        hash_o = {}
+        for _, registro in tabla_o.scan():
+            hash_o.setdefault(registro[pos_on[1 - lado]], []).append(registro)
+
+        q = self._vector_consulta(similar, tabla_v, pos, indice)
+        k = similar.k
+        pedidos, salida, vistos = k, [], 0
+        inicio_plan = len(self.plan)
+        while True:
+            del self.plan[inicio_plan:]           # en el plan queda solo la última búsqueda
+            sim = copy.copy(similar)
+            sim.k = pedidos
+            sub = copy.copy(stm)
+            sub.join = None
+            if locales:
+                sub.condicion = AndCond()
+                sub.condicion.condiciones = locales + [sim]
+            else:
+                sub.condicion = sim
+            pares_v = self._candidatos_similares(tabla_v, sub, sim, pos, indice, q, resolver_v)
+            pares_v.sort(key=lambda par: -par[1])
+            for registro_v, sc in pares_v[vistos:]:
+                for registro_o in hash_o.get(registro_v[pos_on[lado]], ()):
+                    combinado = (list(registro_v) + list(registro_o) if lado == 0
+                                 else list(registro_o) + list(registro_v))
+                    if stm.condicion is None or self._evaluar(stm.condicion, combinado, resolver):
+                        salida.append((combinado, sc))
+                        if len(salida) == k:
+                            break
+                if len(salida) == k:
+                    break
+            vistos = len(pares_v)
+            if len(salida) >= k or len(pares_v) < pedidos:
+                break
+            pedidos *= 2
+        self.plan[inicio_plan]["k"] = k
+        serializador = VariableLengthRecordSerializer(list(izquierda.schema) + list(derecha.schema))
+        self._salida_similitud(stm, salida[:k], tablas, resolver, serializador)
+
+    def _salida_similitud(self, stm, pares, tablas, resolver, serializador):
+        # [(registro, score)] -> resultado: GROUP BY / agregaciones, o ORDER BY + LIMIT + proyección
+        if self._tiene_agregados(stm) or stm.group_by is not None:
+            if any(isinstance(i.columna, SimilarityScoreExpr) for i in stm.proyeccion) \
+                    or isinstance(stm.order_by, SimilarityScoreExpr):
+                raise ExecutionError("SIMILARITY_SCORE() no se puede usar con GROUP BY ni agregaciones")
+            tabla = tablas[0][1]
+            columnas_agregacion = [tabla.column_names[tabla.key_index] if i.agg == AggFun.COUNT_AGG
+                                   else i.columna.columna
+                                   for i in stm.proyeccion if i.agg != AggFun.NONE_AGG]
+            self.plan.append({"node": "HASH AGGREGATE", "operation": "aggregate",
+                              "column": columnas_agregacion})
+            nombres, filas = self._proyeccion_agregada(stm, [r for r, _ in pares], resolver, serializador)
+            if stm.order_by is not None:
+                filas = self._ordenar_resultado(filas, nombres, self._etiqueta_orden(stm.order_by),
+                                                stm.direccion == SortDir.DESC_DIR)
+            if stm.haylimite:
+                filas = filas[:stm.limite]
+            self.plan.append({"node": "OUTPUT", "operation": "return_rows", "rows": len(filas)})
+            self.resultado = Resultado(columnas=nombres, filas=filas, plan=self.plan)
+            return
 
         # ORDER BY: el score (o su alias) o cualquier otra columna; sin ORDER BY el mas parecido primero
         if stm.order_by is not None:
@@ -785,7 +944,7 @@ class ExecuteVisitor(Visitor):
             pares = pares[:stm.limite]
 
         if stm.select_all:
-            nombres = list(tabla.column_names)
+            nombres = [col for _, t in tablas for col in t.column_names]
             filas = [list(registro) for registro, _ in pares]
         else:
             nombres = [self._nombre_item(i) for i in stm.proyeccion]
@@ -1095,15 +1254,27 @@ class ExecuteVisitor(Visitor):
 
         similar = self._similar_de(condicion)
         if similar is not None:
-            pos, indice = self._plan_similitud(tabla, interna, similar)
+            if interna.join is not None:
+                tablas = [(nombre, tabla), (interna.join.tabla, self._abrir(interna.join.tabla))]
+                lado, pos, indice = self._lado_similitud(tablas, interna, similar)
+                nombre, tabla = tablas[lado]
+                self.plan.append({"node": "HASH JOIN", "table": tablas[1 - lado][0], "operation": "join"})
+            else:
+                pos, indice = self._plan_similitud(tabla, interna, similar)
             entrada = {"table": nombre, "column": tabla.column_names[pos],
                        "k": similar.k, "metric": interna.metrica_vectorial}
-            if indice is not None:
+            if indice is not None and interna.indice_vectorial != VectorIndex.LINEAL:
                 entrada.update(node="VECTOR INDEX SCAN", operation="vector_index_scan",
                                index=indice.tipo_indice)
+                if indice.tipo_indice == "ivf":
+                    entrada["nprobe"] = interna.nprobe or NPROBE_DEFECTO
+                else:
+                    entrada["ef_search"] = interna.ef_search or EF_SEARCH_DEFECTO
             else:
                 entrada.update(node="VECTOR SEQ SCAN", operation="vector_scan")
             self.plan.append(entrada)
+            if self._tiene_agregados(interna) or interna.group_by is not None:
+                self.plan.append({"node": "HASH AGGREGATE", "operation": "aggregate"})
             return
 
         _t_plan = time.perf_counter()

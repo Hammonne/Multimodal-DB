@@ -438,6 +438,8 @@ class SelectStmt(Stmt):
         self.haylimite = False
         self.indice_vectorial = VectorIndex.NINGUNO   # USING IVF | HNSW
         self.metrica_vectorial = "coseno"             # WITH METRIC=
+        self.nprobe = None                            # WITH NPROBE= (ivf: celdas que se abren)
+        self.ef_search = None                         # WITH EF_SEARCH= (hnsw: tamaño de la lista)
 
     def accept(self, visitor):
         return visitor.visit_select_stmt(self)

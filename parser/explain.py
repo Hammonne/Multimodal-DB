@@ -167,6 +167,12 @@ def _nodo_scan(entrada, stats, filtro):
             costo_total = costo_inicial + filas_tabla * CPU_TUPLE_COST
         nodo = NodoPlan(etiqueta, costo_inicial, costo_total, k, ancho, medicion=entrada)
         nodo.detalles.append(f"Order By: k-NN por similitud (k={k}, metrica={entrada.get('metric', 'coseno')})")
+        if entrada.get("nprobe"):
+            nodo.detalles.append(f"Parametros: nprobe={entrada['nprobe']}")
+        if entrada.get("ef_search"):
+            nodo.detalles.append(f"Parametros: ef_search={entrada['ef_search']}")
+        if entrada.get("strategy"):
+            nodo.detalles.append(f"Filtro: {entrada['strategy']}")
         if entrada.get("candidates"):
             nodo.detalles.append(f"Vectores revisados: {entrada['candidates']}")
         if filtro:

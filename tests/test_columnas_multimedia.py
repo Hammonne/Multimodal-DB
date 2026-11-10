@@ -149,6 +149,71 @@ class TestColumnasMultimedia(unittest.TestCase):
         self.assertLessEqual(m.k, 1024)
         self.assertEqual(m.vector(self.rotada).shape, (m.k,))
 
+    # búsqueda con filtro, parámetros, JOIN y GROUP BY (usan las tablas de los tests 1-6)
+
+    def ids(self, texto):
+        return [f[0] for f in self.sql(texto).filas]
+
+    def test_9a_filtro_antes_de_buscar(self):
+        import executor as modulo
+        exactos = self.ids(f"SELECT id FROM galeria WHERE id < 6 AND SIMILAR_TO('{self.rotada}', k=3) USING SEQ;")
+        self.assertEqual(len(exactos), 3)
+        self.assertTrue(all(i < 6 for i in exactos))
+        antes = modulo.UMBRAL_PREFILTRO
+        try:
+            for umbral, estrategia in ((antes, "pre-filtro exacto"), (0, "filtro dentro del indice")):
+                modulo.UMBRAL_PREFILTRO = umbral
+                for indice in ("HNSW", "IVF"):
+                    consulta = (f"SELECT id FROM galeria WHERE id < 6 AND SIMILAR_TO('{self.rotada}', k=3) "
+                                f"USING {indice} WITH NPROBE=100" if indice == "IVF" else
+                                f"SELECT id FROM galeria WHERE id < 6 AND SIMILAR_TO('{self.rotada}', k=3) "
+                                f"USING {indice}")
+                    self.assertEqual(self.ids(consulta + ";"), exactos, (umbral, indice))
+                    plan = self.sql(f"EXPLAIN ANALYZE {consulta};").explain
+                    self.assertIn(estrategia, plan, (umbral, indice))
+        finally:
+            modulo.UMBRAL_PREFILTRO = antes
+
+    def test_9b_nprobe_y_ef_search(self):
+        plan = self.sql(f"EXPLAIN SELECT id FROM galeria WHERE SIMILAR_TO('{self.rotada}', k=3) "
+                        "USING IVF WITH NPROBE=7;").explain
+        self.assertIn("nprobe=7", plan)
+        plan = self.sql(f"EXPLAIN SELECT id FROM galeria WHERE SIMILAR_TO('{self.rotada}', k=3) "
+                        "WITH EF_SEARCH=120;").explain
+        self.assertIn("ef_search=120", plan)
+        exactos = self.ids(f"SELECT id FROM galeria WHERE SIMILAR_TO('{self.rotada}', k=5) USING SEQ;")
+        todo = self.ids(f"SELECT id FROM galeria WHERE SIMILAR_TO('{self.rotada}', k=5) USING IVF WITH NPROBE=100;")
+        self.assertEqual(todo, exactos)
+
+    def test_9c_similar_to_con_join(self):
+        a5 = f"{self.audios}/a5.wav"
+        filas = self.sql("SELECT canciones.nombre_cancion, artistas.nombre, SIMILARITY_SCORE() AS s "
+                         "FROM canciones JOIN artistas ON canciones.id_artista = artistas.id "
+                         f"WHERE SIMILAR_TO('{a5}', k=2);").filas
+        self.assertEqual(len(filas), 2)
+        self.assertEqual(filas[0][:2], ["tema 5", "Cata"])
+        # filtro sobre la otra tabla: siguen saliendo k filas, todas de Ana
+        filas = self.sql("SELECT canciones.id_cancion, artistas.nombre FROM canciones JOIN artistas "
+                         "ON canciones.id_artista = artistas.id "
+                         f"WHERE artistas.nombre = 'Ana' AND SIMILAR_TO('{a5}', k=2);").filas
+        self.assertEqual(len(filas), 2)
+        self.assertTrue(all(f[1] == "Ana" for f in filas))
+        # la columna de audio puede estar en la tabla de la derecha
+        filas = self.sql("SELECT canciones.id_cancion FROM artistas JOIN canciones "
+                         "ON artistas.id = canciones.id_artista "
+                         f"WHERE SIMILAR_TO('{a5}', k=1);").filas
+        self.assertEqual(filas, [[5]])
+
+    def test_9d_similar_to_con_group_by(self):
+        a5 = f"{self.audios}/a5.wav"
+        grupos = self.sql("SELECT artistas.nombre, COUNT(*) AS n FROM canciones JOIN artistas "
+                          "ON canciones.id_artista = artistas.id "
+                          f"WHERE SIMILAR_TO('{a5}', k=6) GROUP BY artistas.nombre;").filas
+        self.assertEqual(sum(g[1] for g in grupos), 6)
+        grupos = self.sql(f"SELECT id_artista, COUNT(*) AS n FROM canciones WHERE SIMILAR_TO('{a5}', k=4) "
+                          "GROUP BY id_artista;").filas
+        self.assertEqual(sum(g[1] for g in grupos), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

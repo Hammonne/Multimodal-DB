@@ -136,7 +136,8 @@ class TestExecutorSimilitud(unittest.TestCase):
             (f"SELECT * FROM canciones WHERE SIMILAR_TO('{self.img}', k=3) USING IVF", "no tiene un indice IVF"),
             ("SELECT * FROM canciones WHERE SIMILAR_TO('a.txt', k=3)", "imagen o audio"),
             ("CREATE INDEX ON canciones (id) USING HNSW", "VARCHAR"),
-            (f"SELECT COUNT(*) FROM canciones WHERE SIMILAR_TO('{self.img}', k=3)", "agregaciones"),
+            (f"SELECT genero, SIMILARITY_SCORE() FROM canciones WHERE SIMILAR_TO('{self.img}', k=3) "
+             "GROUP BY genero", "SIMILARITY_SCORE() no se puede usar con GROUP BY"),
         ]
         for sql, mensaje in malos:
             with self.assertRaises(ExecutionError, msg=sql) as ctx:
