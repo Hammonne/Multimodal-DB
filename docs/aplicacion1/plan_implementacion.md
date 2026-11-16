@@ -6,7 +6,7 @@ backend FastAPI y frontend Next.js.
 
 ## 1. Objetivo y alcance
 
-Construir un chatbot RAG que responda preguntas sobre 20–50 papers académicos,
+Construir un chatbot RAG sobre un catálogo amplio de papers de computer vision,
 combinando:
 
 - búsqueda textual con SPIMI, BM25 y TF-IDF;
@@ -16,8 +16,15 @@ combinando:
 - citas verificables por paper, autor, año y páginas;
 - API FastAPI e interfaz dentro de la aplicación web existente.
 
-La primera versión debe priorizar trazabilidad y reproducibilidad sobre
-funcionalidades opcionales como reranking, conversación multi-turno u OCR.
+La ingesta debe poder recorrer todo el catálogo disponible, pero la primera
+validación funcional y la evaluación controlada se realizarán sobre 20–50
+papers. Esto permite probar el pipeline sin esperar a descargar y procesar
+todo el universo antes de detectar errores.
+
+El archivo `pwc.csv` de Papers With Code funciona como catálogo de metadata,
+no como colección local de PDFs. En el snapshot consultado contiene
+aproximadamente 1,847 líneas incluyendo el encabezado; solo una parte de los
+registros apunta directamente a un archivo PDF y otros apuntan a páginas HTML.
 
 ## 2. Restricciones del proyecto
 
@@ -29,12 +36,14 @@ funcionalidades opcionales como reranking, conversación multi-turno u OCR.
    - [`web/backend/main.py`](../../web/backend/main.py) para la API.
    - [`web/app/page.tsx`](../../web/app/page.tsx) para la interfaz.
 3. La demo actual de SQL, texto y multimedia debe continuar funcionando.
-4. El corpus inicial debe limitarse a 20–50 papers para permitir validación
-   manual de metadata y resultados.
+4. El catálogo puede contener todos los registros disponibles, pero el corpus
+   de validación inicial debe limitarse a 20–50 papers.
 5. Los embeddings y el índice HNSW se persistirán inicialmente en `.npz`, con un
    mapping separado `posición del vector → chunk_id`.
 6. Se deben seleccionar PDFs con texto nativo. OCR queda fuera de la primera
    versión.
+7. La descarga masiva debe ser gradual, con reintentos, límites de velocidad,
+   registro de errores y respeto de las condiciones de cada fuente.
 
 ## 3. Arquitectura propuesta
 
@@ -105,12 +114,17 @@ rag/
 
 scripts/
 ├── ingest_papers.py
+├── import_pwc_catalog.py
+├── download_papers.py
 ├── build_rag_indexes.py
 └── evaluate_rag.py
 
 data/papers/
 data/rag/
+├── pwc_catalog.csv
 ├── metadata.csv
+├── download_manifest.jsonl
+├── failed_downloads.jsonl
 ├── chunks.jsonl
 ├── chunk_mapping.json
 ├── embeddings.npz
@@ -120,7 +134,275 @@ data/rag/
 La lógica de RAG debe permanecer separada de `web/backend/`. El backend solo
 debe validar solicitudes, llamar al servicio RAG y serializar respuestas.
 
-## 5. Fases de implementación
+## 5. Fase previa: importar el catálogo y adquirir papers
+
+Esta fase debe ejecutarse antes de la preparación manual del corpus.
+
+### 5.1 Importar `pwc.csv`
+
+Crear `scripts/import_pwc_catalog.py` para:
+
+1. descargar el CSV desde:
+   `https://raw.githubusercontent.com/zziz/pwc/master/src/pwc.csv`;
+2. leerlo con `csv.DictReader`, no separarlo manualmente por comas;
+3. conservar:
+   - `paper_title`;
+   - `paper_link`;
+   - `conference`;
+   - `year`;
+   - `repo_link`;
+   - `repo_star`;
+   - `last_update`;
+4. normalizar espacios, URLs y años;
+5. deduplicar por URL y, como respaldo, por título normalizado;
+6. guardar `data/rag/pwc_catalog.csv`.
+
+El catálogo debe conservarse aunque el PDF no pueda descargarse. Un registro de
+catálogo no implica que exista un documento local utilizable por el RAG.
+
+### 5.2 Descargar los documentos
+
+Crear `scripts/download_papers.py` con estas reglas:
+
+- procesar solo URLs `http` o `https`;
+- identificar si el recurso es PDF por `Content-Type`, extensión o firma
+  `%PDF`;
+- guardar cada archivo con un nombre seguro basado en un hash de la URL;
+- no usar `repo_link` para descargar el paper;
+- aplicar timeout, reintentos limitados y espera entre solicitudes;
+- no descargar el mismo recurso si ya tiene checksum registrado;
+- limitar el número de descargas por ejecución mediante `--limit`;
+- permitir reanudar con `--resume`;
+- guardar errores sin detener todo el lote.
+
+Ejemplo de uso:
+
+```bash
+python3 scripts/import_pwc_catalog.py
+python3 scripts/download_papers.py --limit 50
+python3 scripts/download_papers.py --resume
+```
+
+El manifiesto `data/rag/download_manifest.jsonl` debe registrar al menos:
+
+```json
+{
+  "catalog_id": "sha256:url",
+  "paper_title": "...",
+  "source_url": "...",
+  "local_path": "data/papers/...",
+  "status": "downloaded",
+  "http_status": 200,
+  "content_type": "application/pdf",
+  "sha256": "...",
+  "bytes": 123456,
+  "attempts": 1
+}
+```
+
+Estados mínimos:
+
+```text
+cataloged
+downloaded
+not_pdf
+http_error
+invalid_pdf
+extracted
+failed
+```
+
+### 5.3 Resolver enlaces HTML
+
+Los enlaces a páginas de CVPR, ICCV, NeurIPS u otros sitios no deben
+interpretarse automáticamente como PDF sin validar el contenido. Para la
+primera versión:
+
+1. intentar descargar el enlace;
+2. comprobar si la respuesta es un PDF;
+3. si es HTML, registrar `not_pdf`;
+4. dejar la resolución específica de cada portal como una mejora posterior.
+
+No se debe hacer scraping agresivo ni asumir que todos los papers tienen la
+misma licencia o estructura de URL.
+
+### 5.4 Capas de disponibilidad
+
+Separar explícitamente estos conteos:
+
+| Capa | Significado |
+|---|---|
+| Catálogo | Registro existente en `pwc_catalog.csv` |
+| Descargable | Se obtuvo una respuesta HTTP válida |
+| PDF válido | El archivo contiene un PDF legible |
+| Texto extraído | PyMuPDF extrajo texto suficiente |
+| Indexable | Tiene chunks válidos y metadata utilizable |
+| Evaluación | Fue seleccionado para preguntas de ground truth |
+
+### 5.5 Criterios de aceptación
+
+- El catálogo completo se importa sin perder filas con comas o comillas.
+- El downloader puede detenerse y continuar sin duplicados.
+- Cada intento queda registrado en el manifiesto.
+- Un enlace HTML no se guarda incorrectamente como PDF.
+- Los errores de una fuente no detienen el lote completo.
+- Se puede obtener un subconjunto reproducible con `--limit` para la fase uno.
+├── storage/
+│   ├── corpus_store.py
+│   └── chunk_mapping.py
+├── embeddings/
+│   └── encoder.py
+├── indexing/
+│   ├── build_text_index.py
+│   └── build_vector_index.py
+├── retrieval/
+│   ├── text_retrieval.py
+│   ├── vector_retrieval.py
+│   └── hybrid.py
+├── generation/
+│   ├── prompt.py
+│   └── llm_client.py
+└── evaluation/
+    ├── metrics.py
+    └── runner.py
+
+scripts/
+├── ingest_papers.py
+├── import_pwc_catalog.py
+├── download_papers.py
+├── build_rag_indexes.py
+└── evaluate_rag.py
+
+data/papers/
+data/rag/
+├── pwc_catalog.csv
+├── metadata.csv
+├── download_manifest.jsonl
+├── failed_downloads.jsonl
+├── chunks.jsonl
+├── chunk_mapping.json
+├── embeddings.npz
+└── hnsw.npz
+```
+
+La lógica de RAG debe permanecer separada de `web/backend/`. El backend solo
+debe validar solicitudes, llamar al servicio RAG y serializar respuestas.
+
+## 5. Fase previa: importar el catálogo y adquirir papers
+
+Esta fase debe ejecutarse antes de la preparación manual del corpus.
+
+### 5.1 Importar `pwc.csv`
+
+Crear `scripts/import_pwc_catalog.py` para:
+
+1. descargar el CSV desde:
+   `https://raw.githubusercontent.com/zziz/pwc/master/src/pwc.csv`;
+2. leerlo con `csv.DictReader`, no separarlo manualmente por comas;
+3. conservar:
+   - `paper_title`;
+   - `paper_link`;
+   - `conference`;
+   - `year`;
+   - `repo_link`;
+   - `repo_star`;
+   - `last_update`;
+4. normalizar espacios, URLs y años;
+5. deduplicar por URL y, como respaldo, por título normalizado;
+6. guardar `data/rag/pwc_catalog.csv`.
+
+El catálogo debe conservarse aunque el PDF no pueda descargarse. Un registro de
+catálogo no implica que exista un documento local utilizable por el RAG.
+
+### 5.2 Descargar los documentos
+
+Crear `scripts/download_papers.py` con estas reglas:
+
+- procesar solo URLs `http` o `https`;
+- identificar si el recurso es PDF por `Content-Type`, extensión o firma
+  `%PDF`;
+- guardar cada archivo con un nombre seguro basado en un hash de la URL;
+- no usar `repo_link` para descargar el paper;
+- aplicar timeout, reintentos limitados y espera entre solicitudes;
+- no descargar el mismo recurso si ya tiene checksum registrado;
+- limitar el número de descargas por ejecución mediante `--limit`;
+- permitir reanudar con `--resume`;
+- guardar errores sin detener todo el lote.
+
+Ejemplo de uso:
+
+```bash
+python3 scripts/import_pwc_catalog.py
+python3 scripts/download_papers.py --limit 50
+python3 scripts/download_papers.py --resume
+```
+
+El manifiesto `data/rag/download_manifest.jsonl` debe registrar al menos:
+
+```json
+{
+  "catalog_id": "sha256:url",
+  "paper_title": "...",
+  "source_url": "...",
+  "local_path": "data/papers/...",
+  "status": "downloaded",
+  "http_status": 200,
+  "content_type": "application/pdf",
+  "sha256": "...",
+  "bytes": 123456,
+  "attempts": 1
+}
+```
+
+Estados mínimos:
+
+```text
+cataloged
+downloaded
+not_pdf
+http_error
+invalid_pdf
+extracted
+failed
+```
+
+### 5.3 Resolver enlaces HTML
+
+Los enlaces a páginas de CVPR, ICCV, NeurIPS u otros sitios no deben
+interpretarse automáticamente como PDF sin validar el contenido. Para la
+primera versión:
+
+1. intentar descargar el enlace;
+2. comprobar si la respuesta es un PDF;
+3. si es HTML, registrar `not_pdf`;
+4. dejar la resolución específica de cada portal como una mejora posterior.
+
+No se debe hacer scraping agresivo ni asumir que todos los papers tienen la
+misma licencia o estructura de URL.
+
+### 5.4 Capas de disponibilidad
+
+Separar explícitamente estos conteos:
+
+| Capa | Significado |
+|---|---|
+| Catálogo | Registro existente en `pwc_catalog.csv` |
+| Descargable | Se obtuvo una respuesta HTTP válida |
+| PDF válido | El archivo contiene un PDF legible |
+| Texto extraído | PyMuPDF extrajo texto suficiente |
+| Indexable | Tiene chunks válidos y metadata utilizable |
+| Evaluación | Fue seleccionado para preguntas de ground truth |
+
+### 5.5 Criterios de aceptación
+
+- El catálogo completo se importa sin perder filas con comas o comillas.
+- El downloader puede detenerse y continuar sin duplicados.
+- Cada intento queda registrado en el manifiesto.
+- Un enlace HTML no se guarda incorrectamente como PDF.
+- Los errores de una fuente no detienen el lote completo.
+- Se puede obtener un subconjunto reproducible con `--limit` para la fase uno.
+
+## 6. Fases de implementación
 
 ### Fase 0: Validar el motor existente
 
@@ -152,14 +434,18 @@ class CorpusStore:
 Se puede insertar un paper, insertar sus chunks y recuperarlos por ID sin
 modificar el motor base.
 
-### Fase 1: Preparar el corpus
+### Fase 1: Preparar el corpus de validación
 
 #### Tareas
 
-1. Seleccionar 20–50 papers sobre bases de datos, recuperación de información,
-   BM25, HNSW, IVF o búsqueda vectorial.
-2. Guardarlos en `data/papers/`.
-3. Crear `data/rag/metadata.csv`:
+1. Seleccionar 20–50 papers del catálogo que tengan PDF válido y texto nativo.
+2. Priorizar papers de visión por computador relacionados con:
+   - detección;
+   - segmentación;
+   - embeddings;
+   - búsqueda visual;
+   - aprendizaje profundo.
+3. Crear `data/rag/metadata.csv` a partir del manifiesto:
 
    ```csv
    source_file,title,authors,year,language
@@ -501,7 +787,7 @@ La interfaz debe incluir:
 Desde `http://localhost:3000`, el usuario puede hacer una pregunta y comprobar
 visualmente qué chunks originaron la respuesta.
 
-## 6. Evaluación
+## 7. Evaluación
 
 Crear entre 20 y 30 preguntas en:
 
@@ -547,7 +833,7 @@ Para la generación, evaluar manualmente:
 
 Guardar los resultados en `benchmark/rag/` y documentarlos en el informe.
 
-## 7. Dependencias
+## 8. Dependencias
 
 Agregar únicamente las dependencias necesarias al archivo de dependencias del
 backend:
@@ -580,25 +866,28 @@ RAG_HNSW_EF_CONSTRUCTION=200
 RAG_HNSW_EF_SEARCH=50
 ```
 
-## 8. Orden recomendado de ejecución
+## 9. Orden recomendado de ejecución
 
-1. Validar la persistencia de `rag_papers` y `rag_chunks`.
-2. Procesar un solo PDF.
-3. Probar recuperación BM25 sobre chunks.
-4. Generar embeddings de esos chunks.
-5. Probar HNSW y el mapping de IDs.
-6. Implementar RRF.
-7. Integrar un proveedor LLM.
-8. Exponer `/api/rag/ask`.
-9. Agregar el panel frontend.
-10. Escalar a 20–50 papers.
-11. Ejecutar la evaluación.
-12. Documentar resultados y limitaciones.
+1. Importar y versionar el catálogo `pwc.csv`.
+2. Descargar un lote pequeño con `--limit`.
+3. Validar persistencia de `rag_papers` y `rag_chunks`.
+4. Procesar un solo PDF.
+5. Probar recuperación BM25 sobre chunks.
+6. Generar embeddings de esos chunks.
+7. Probar HNSW y el mapping de IDs.
+8. Implementar RRF.
+9. Integrar un proveedor LLM.
+10. Exponer `/api/rag/ask`.
+11. Agregar el panel frontend.
+12. Escalar el downloader al catálogo completo.
+13. Seleccionar 20–50 papers para evaluación.
+14. Ejecutar la evaluación.
+15. Documentar resultados, cobertura y limitaciones.
 
 No conviene comenzar por la interfaz ni por el LLM: la calidad de la demo
 depende primero de que los chunks, IDs, páginas e índices sean trazables.
 
-## 9. Riesgos y mitigaciones
+## 10. Riesgos y mitigaciones
 
 | Riesgo | Mitigación |
 |---|---|
@@ -612,11 +901,18 @@ depende primero de que los chunks, IDs, páginas e índices sean trazables.
 | API del LLM costosa | Ollama local o cache de preguntas |
 | Reprocesamiento duplicado | Usar `source_file` como identificador único |
 | Se rompe la demo actual | Mantener RAG en módulos, endpoints y componentes separados |
+| El catálogo contiene páginas HTML en vez de PDFs | Registrar `not_pdf` y no enviarlas al extractor |
+| Una fuente bloquea o limita descargas | Reintentos acotados, espera entre solicitudes y reanudación |
+| El volumen hace lento el procesamiento | Separar catálogo, descarga, extracción e indexación por lotes |
+| Se descargan documentos sin permiso claro | Revisar términos de la fuente y conservar solo enlaces/metadatos cuando corresponda |
 
-## 10. Entregables finales
+## 11. Entregables finales
 
 - Pipeline reproducible de ingestión.
-- Corpus de 20–50 papers.
+- Catálogo completo importado desde `pwc.csv`.
+- Manifiesto reproducible de descargas y errores.
+- Corpus descargado de todos los PDFs accesibles y permitidos.
+- Corpus de validación de 20–50 papers.
 - Metadata validada.
 - Tablas `rag_papers` y `rag_chunks`.
 - Índice SPIMI/BM25/TF-IDF sobre chunks.
@@ -630,15 +926,18 @@ depende primero de que los chunks, IDs, páginas e índices sean trazables.
 - README actualizado con instrucciones locales y Docker.
 - Informe con arquitectura, métricas, riesgos y limitaciones.
 
-## 11. Criterio de finalización
+## 12. Criterio de finalización
 
 La implementación se considera terminada cuando:
 
-1. el corpus puede procesarse desde cero con un comando reproducible;
-2. los índices pueden reconstruirse sin intervención manual;
-3. una pregunta devuelve una respuesta con fuentes;
-4. cada fuente permite localizar paper, páginas y chunk;
-5. BM25, vectorial e híbrido pueden compararse desde la interfaz;
-6. las pruebas existentes del proyecto continúan pasando;
-7. existe evidencia cuantitativa de calidad y latencia;
-8. no hay claves secretas ni datos temporales obligatorios dentro del repositorio.
+1. el catálogo puede importarse desde cero con un comando reproducible;
+2. las descargas pueden pausarse y reanudarse sin duplicados;
+3. cada paper tiene un estado de adquisición explícito;
+4. el corpus disponible puede procesarse desde cero;
+5. los índices pueden reconstruirse sin intervención manual;
+6. una pregunta devuelve una respuesta con fuentes;
+7. cada fuente permite localizar paper, páginas y chunk;
+8. BM25, vectorial e híbrido pueden compararse desde la interfaz;
+9. las pruebas existentes del proyecto continúan pasando;
+10. existe evidencia cuantitativa de calidad, latencia y cobertura;
+11. no hay claves secretas ni datos temporales obligatorios dentro del repositorio.
