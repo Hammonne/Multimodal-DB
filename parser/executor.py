@@ -17,6 +17,7 @@ import os
 import csv
 import json
 import copy
+import heapq
 import math
 import time
 from contextlib import contextmanager
@@ -62,7 +63,7 @@ from storage.lock_manager import LockMode
 from storage.formats.data_types import MEDIA_DATA_TYPES
 from storage.modelo_multimedia import ModeloMultimedia
 from storage.rid import RID
-from text_based.spimi import SPIMIIndex
+from text_based.spimi import SPIMIIndex, tokenize
 from text_based.bm25 import BM25
 from text_based.tfidf import TFIDFCosine
 
@@ -121,10 +122,20 @@ class SqlTextIndex:
 
     def search(self, query, algorithm, top_k):
         algorithm = algorithm.casefold()
-        if algorithm not in {"bm25", "tfidf"}:
+        if algorithm not in {"bm25", "tfidf", "spimi"}:
             raise ExecutionError(
                 f"algoritmo textual no soportado: {algorithm}; "
-                "use BM25 o TF_IDF"
+                "use SPIMI, BM25 o TF_IDF"
+            )
+        if algorithm == "spimi":
+            # SPIMI puro: sin TF-IDF ni BM25, el score es la suma de las
+            # frecuencias de los terminos de la consulta en cada documento.
+            scores = {}
+            for term in set(tokenize(query)):
+                for doc_id, frequency in self.index.get_postings(term):
+                    scores[doc_id] = scores.get(doc_id, 0.0) + frequency
+            return heapq.nlargest(
+                top_k, scores.items(), key=lambda item: item[1]
             )
         ranker = BM25(self.index) if algorithm == "bm25" else TFIDFCosine(self.index)
         return ranker.search(query, top_k)
@@ -230,6 +241,7 @@ class ExecuteVisitor(Visitor):
         self.transaction_id = None
         self.session_id = self.sm.allocate_session_id()
         self._text_indexes = {}
+        self._text_versions = {}
 
     def ejecutar(self, programa) -> list:
         salidas = []
@@ -527,36 +539,101 @@ class ExecuteVisitor(Visitor):
                 return matches[0]
         return None
 
+    @staticmethod
+    def _condicion_sin_match(condicion):
+        """Deja solo las condiciones que no son MATCH, para aplicarlas como filtro."""
+        if isinstance(condicion, MatchExpr):
+            return None
+        if isinstance(condicion, AndCond):
+            resto = [
+                parte for parte in (
+                    ExecuteVisitor._condicion_sin_match(c)
+                    for c in condicion.condiciones
+                )
+                if parte is not None
+            ]
+            if not resto:
+                return None
+            if len(resto) == 1:
+                return resto[0]
+            combinada = AndCond()
+            combinada.condiciones = resto
+            return combinada
+        return condicion
+
     def _select_textual(self, tabla, stm, match):
         columna = match.columna.columna
-        indice = self._text_indexes.get((tabla.name, columna))
+        posicion = tabla.column_index(columna)
+        clave = (tabla.name, columna)
+        version = getattr(tabla, "version", 0)
+
+        indice = self._text_indexes.get(clave)
+        if indice is not None and self._text_versions.get(clave) != version:
+            indice = None  # el snapshot quedo viejo: se reconstruye
+
         if indice is None:
-            for meta in self.sm.catalog.get_table_indexes(tabla.name):
-                if (meta["column_name"] == columna
-                        and meta["index_type"].lower() == "spimi"):
-                    base = os.path.join(TEXT_INDEX_ROOT, meta["index_name"])
-                    try:
-                        indice = SqlTextIndex(base, tabla,
-                                              meta["column_index"]).load()
-                    except (OSError, ValueError) as exc:
-                        raise ExecutionError(
-                            f"no se pudo cargar el indice SPIMI '{meta['index_name']}': {exc}"
-                        ) from exc
-                    self._text_indexes[(tabla.name, columna)] = indice
-                    break
-        if indice is None:
-            raise ExecutionError(
-                f"no existe un indice SPIMI sobre {tabla.name}({columna}); "
-                f"cree uno con CREATE INDEX ON {tabla.name} ({columna}) USING SPIMI"
-            )
-        resultados = indice.search(match.consulta, match.algoritmo,
-                                   stm.limite if stm.haylimite else 10)
+            base = None
+            if clave in self._text_indexes:
+                base = self._text_indexes[clave].path
+            else:
+                for meta in self.sm.catalog.get_table_indexes(tabla.name):
+                    if (meta["column_name"] == columna
+                            and meta["index_type"].lower()
+                            in ("spimi", "tfidf", "bm25")):
+                        base = os.path.join(TEXT_INDEX_ROOT, meta["index_name"])
+                        try:
+                            indice = SqlTextIndex(
+                                base, tabla, meta["column_index"]
+                            ).load()
+                        except (OSError, ValueError) as exc:
+                            raise ExecutionError(
+                                f"no se pudo cargar el indice SPIMI "
+                                f"'{meta['index_name']}': {exc}"
+                            ) from exc
+                        break
+
+            if indice is None:
+                # Sin indice registrado, MATCH construye uno automatico sobre
+                # la tabla actual. Asi las consultas funcionan sin exigir un
+                # CREATE INDEX previo.
+                if base is None:
+                    base = os.path.join(
+                        TEXT_INDEX_ROOT, f"auto_{tabla.name}_{columna}"
+                    )
+                try:
+                    indice = SqlTextIndex(base, tabla, posicion)
+                    indice.build(tabla)
+                except (OSError, ValueError) as exc:
+                    raise ExecutionError(
+                        f"no se pudo construir el indice de texto: {exc}"
+                    ) from exc
+
+            self._text_indexes[clave] = indice
+            self._text_versions[clave] = version
+
+        resto = self._condicion_sin_match(stm.condicion)
+        total = max(1, indice.index.doc_count)
+        limite_busqueda = total if resto is not None else (
+            stm.limite if stm.haylimite else 10
+        )
+        resultados = indice.search(
+            match.consulta, match.algoritmo, limite_busqueda
+        )
         por_id = {doc_id: score for doc_id, score in resultados}
+
+        resolver = self._resolver_columnas([(tabla.name, tabla)])
         filas = []
         for doc_id, (_, values) in enumerate(tabla.scan()):
-            if doc_id in por_id:
-                filas.append((values, por_id[doc_id]))
+            if doc_id not in por_id:
+                continue
+            if resto is not None and not self._evaluar(
+                resto, values, resolver
+            ):
+                continue
+            filas.append((values, por_id[doc_id]))
         filas.sort(key=lambda item: item[1], reverse=True)
+        if stm.haylimite:
+            filas = filas[:stm.limite]
 
         self.plan = [{
             "node": "TEXT INDEX SCAN",
@@ -576,7 +653,6 @@ class ExecuteVisitor(Visitor):
                 nombres.append(score_items[0].alias or "score")
             salida = [list(values) for values, _ in filas]
         else:
-            resolver = self._resolver_columnas([(tabla.name, tabla)])
             salida = []
             for item in stm.proyeccion:
                 nombres.append(self._nombre_item(item))
@@ -588,7 +664,10 @@ class ExecuteVisitor(Visitor):
                     else:
                         row.append(values[resolver(item.columna)])
                 salida.append(row)
-        if stm.select_all and any(isinstance(item.columna, SimilarityScoreExpr) for item in stm.proyeccion):
+        if stm.select_all and any(
+            isinstance(item.columna, SimilarityScoreExpr)
+            for item in stm.proyeccion
+        ):
             salida = [row + [score] for row, (_, score) in zip(salida, filas)]
         self.plan.append({"node": "OUTPUT", "operation": "return_rows", "rows": len(salida)})
         self.resultado = Resultado(columnas=nombres, filas=salida, plan=self.plan)
@@ -1000,19 +1079,35 @@ class ExecuteVisitor(Visitor):
         tabla = self._abrir(stm.tabla)
         pos = tabla.column_index(stm.columna)
 
-        if stm.tipo == IndexKind.SPIMI_IDX:
+        tipos_texto = {
+            IndexKind.SPIMI_IDX: "spimi",
+            IndexKind.TFIDF_IDX: "tfidf",
+            IndexKind.BM25_IDX: "bm25",
+        }
+        if stm.tipo in tipos_texto:
             if tabla.file_type != "heap":
-                raise ExecutionError("un indice SPIMI exige una tabla USING HEAP")
-            nombre = f"idx_{stm.tabla}_{stm.columna}_spimi"
+                raise ExecutionError(
+                    "un indice de texto exige una tabla USING HEAP"
+                )
+            kind = tipos_texto[stm.tipo]
+            etiqueta = {
+                "spimi": "SPIMI", "tfidf": "TF_IDF", "bm25": "BM25"
+            }[kind]
+            nombre = f"idx_{stm.tabla}_{stm.columna}_{kind}"
             base = os.path.join(TEXT_INDEX_ROOT, nombre)
             indice = SqlTextIndex(base, tabla, pos)
             try:
                 indice.build(tabla)
             except (OSError, ValueError) as exc:
-                raise ExecutionError(f"no se pudo construir el indice SPIMI: {exc}") from exc
+                raise ExecutionError(
+                    f"no se pudo construir el indice {etiqueta}: {exc}"
+                ) from exc
             self._text_indexes[(stm.tabla, stm.columna)] = indice
+            self._text_versions[(stm.tabla, stm.columna)] = getattr(
+                tabla, "version", 0
+            )
             self.sm.catalog.register_index(
-                nombre, stm.tabla, stm.columna, pos, "spimi"
+                nombre, stm.tabla, stm.columna, pos, kind
             )
             self._log_ddl(
                 "create_index", stm.tabla,
@@ -1021,7 +1116,8 @@ class ExecuteVisitor(Visitor):
                  "clustered": False},
             )
             self.resultado = Resultado(
-                f"Indice SPIMI '{nombre}' creado sobre {stm.tabla}({stm.columna})"
+                f"Indice {etiqueta} '{nombre}' creado sobre "
+                f"{stm.tabla}({stm.columna})"
             )
             return
 
@@ -1277,6 +1373,22 @@ class ExecuteVisitor(Visitor):
                 self.plan.append({"node": "HASH AGGREGATE", "operation": "aggregate"})
             return
 
+        textual = self._text_match_de(condicion)
+        if textual is not None:
+            self.plan.append({
+                "node": "TEXT INDEX SCAN",
+                "table": nombre,
+                "operation": "text_index_scan",
+                "index": "SPIMI",
+                "algorithm": textual.algoritmo,
+                "query": textual.consulta,
+            })
+            if self._tiene_agregados(interna):
+                self.plan.append({
+                    "node": "HASH AGGREGATE", "operation": "aggregate",
+                })
+            return
+
         _t_plan = time.perf_counter()
         plan_bitmap = self._plan_bitmap(tabla, condicion, resolver)
         self._planning_ms += (time.perf_counter() - _t_plan) * 1000.0
@@ -1331,6 +1443,14 @@ class ExecuteVisitor(Visitor):
         return self._texto_condicion(condicion)
 
     def _texto_condicion(self, cond) -> str:
+        if isinstance(cond, MatchExpr):
+            algoritmo = {
+                "tfidf": "TF_IDF", "bm25": "BM25", "spimi": "SPIMI",
+            }.get(cond.algoritmo, cond.algoritmo.upper())
+            columna = self._texto_operando(cond.columna)
+            return (
+                f"MATCH({columna}, '{cond.consulta}') USING {algoritmo}"
+            )
         if isinstance(cond, SimilarToExpr):
             return cond.etiqueta()
         if isinstance(cond, WithinExpr):

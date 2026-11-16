@@ -111,6 +111,23 @@ celular, en cambio, no acierta nunca, porque MFCC no aguanta que se pierdan frec
 El análisis completo, con galerías de aciertos y errores y la comparación con Faiss y hnswlib, está en
 [`benchmark/multimedia/`](benchmark/multimedia/README.md).
 
+Para texto comparamos TF-IDF + coseno, BM25 y el GIN de PostgreSQL con 10 000 letras, consultas de
+1, 3 y 5+ palabras, Precision@10 y Recall@10:
+
+<p align="center">
+  <img src="benchmark/text_based/comparacion_consultas_ms.png" alt="tiempo de consulta textual por longitud" width="800">
+</p>
+
+| Texto, N = 10 000 | Construir | Consulta (5+ palabras) | P@10 | R@10 |
+|---|---:|---:|---:|---:|
+| TF-IDF + coseno | 7.7 s | 18.4 ms | 0.467 | 0.036 |
+| **BM25** | **7.2 s** | **13.4 ms** | **0.967** | **0.066** |
+| GIN (PostgreSQL) | 5.9 s | 146.4 ms | 0.333 | 0.033 |
+
+BM25 gana en ranking y en consulta; GIN construye más rápido, pero suma el costo de la tabla y del
+`tsvector` en disco y ordena peor con `ts_rank_cd`. El detalle está en
+[`benchmark/text_based/`](benchmark/text_based/README.md).
+
 ## Pruébalo
 
 ```bash
@@ -147,6 +164,7 @@ Pruebas: `python run_all_tests.py`.
 | Índices vectoriales: métricas, IVF, HNSW | [`indexes/VECTOR_README.md`](indexes/VECTOR_README.md) |
 | chutaDB frente a gestores vectoriales reales, con fuentes | [`docs/BASE_VECTORIAL.md`](docs/BASE_VECTORIAL.md) |
 | Benchmark multimedia | [`benchmark/multimedia/README.md`](benchmark/multimedia/README.md) |
+| Benchmark de texto: TF-IDF vs BM25 vs GIN | [`benchmark/text_based/README.md`](benchmark/text_based/README.md) |
 | Dataset: fuentes, cómo se descarga, columnas | [`data/README.md`](data/README.md) |
 
 ### Organización del código

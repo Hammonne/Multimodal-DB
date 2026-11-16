@@ -162,20 +162,21 @@ def test_calcula_puntuacion_bm25():
         df = 2
 
         expected_idf = math.log(
-            (N - df + 0.5) / (df + 0.5)
+            1 + (N - df + 0.5) / (df + 0.5)
         )
 
         doc_id = 1
         tf = 2
         doc_length = bm25.index.doc_lengths[doc_id]
 
-        thirdterm = (
+        norm = (
             1 - bm25.b
             + bm25.b * doc_length / bm25.avg_doc_length
         )
 
-        expected_tf = tf / (
-            tf + bm25.k1 + thirdterm
+        expected_tf = (
+            tf * (bm25.k1 + 1)
+            / (tf + bm25.k1 * norm)
         )
 
         expected_score = expected_tf * expected_idf

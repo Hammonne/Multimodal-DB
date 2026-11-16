@@ -3,8 +3,10 @@
 Este documento explica qué se cambió para la Parte 3, cómo funciona SPIMI y
 cómo está implementado.
 
-Por ahora **solo se construye el índice**. No están implementados TF-IDF +
-coseno, BM25, la comparación contra GIN ni las consultas `MATCH` del parser.
+El proyecto ya incluye TF-IDF + coseno, BM25, las consultas `MATCH` /
+`SCORE()` del parser y la comparación contra GIN de PostgreSQL. Las fórmulas
+están corregidas a las estándar y el benchmark completo vive en
+[`benchmark/text_based/README.md`](../benchmark/text_based/README.md).
 
 ---
 
@@ -27,18 +29,24 @@ coseno, BM25, la comparación contra GIN ni las consultas `MATCH` del parser.
   - `tests/text_based/test_fetch_lyrics.py`
 - Se usó `scripts/fetch_lyrics.py` para generar un dataset chico de letras y
   probar el pipeline completo.
-- No se modificó el parser ni el ejecutor SQL.
+- Se integró `MATCH` / `SCORE()` en el parser y el ejecutor SQL.
+- Se agregaron TF-IDF + coseno y BM25 sobre el índice.
 
 Archivos:
 
 ```text
 text_based/
 ├── __init__.py
-└── spimi.py
+├── spimi.py
+├── tfidf.py
+└── bm25.py
 
 tests/text_based/
 ├── test_fetch_lyrics.py
-└── test_spimi.py
+├── test_spimi.py
+├── test_tfidf.py
+├── test_bm25.py
+└── test_sql_match.py
 
 docs/
 └── SPIMI.md
@@ -408,6 +416,9 @@ Los archivos de `data/` no se versionan: están en `.gitignore`.
 ```bash
 PYTHONPATH=. python3 tests/text_based/test_spimi.py
 PYTHONPATH=. python3 tests/text_based/test_fetch_lyrics.py
+PYTHONPATH=. python3 tests/text_based/test_tfidf.py
+PYTHONPATH=. python3 tests/text_based/test_bm25.py
+PYTHONPATH=. python3 tests/text_based/test_sql_match.py
 ```
 
 `test_spimi.py` cubre:
@@ -432,23 +443,37 @@ PYTHONPATH=. python3 tests/text_based/test_fetch_lyrics.py
 
 ---
 
-## 9. Lo que todavía no está implementado
+## 9. Fórmulas de ranking
 
-- TF-IDF + similitud del coseno
-- BM25
-- Precision@10 / Recall@10
-- Comparación contra GIN de PostgreSQL
-- Extensión del parser SQL con `MATCH` / `SCORE()`
-- Búsqueda por imagen o audio
-- Integración con `ExternalSorter` / `IndexManager`
+**TF-IDF + coseno:**
 
-Cuando se implemente el parser, `MATCH` va a tener que:
+```text
+idf(t) = log10(N / df(t))
+peso(t, d) = tf(t, d) · idf(t)
+similitud(q, d) = (Σ peso(t, q) · peso(t, d)) / (||q|| · ||d||)
+```
 
-1. tokenizar la consulta;
-2. buscar cada término en el índice invertido;
-3. obtener los documentos candidatos;
-4. aplicar TF-IDF + coseno o BM25;
-5. devolver los documentos ordenados por `SCORE()`.
+El TF es la frecuencia cruda en el documento. El documento y la consulta usan
+el mismo idf; el puntaje es el coseno entre ambos vectores.
+
+**BM25:**
+
+```text
+idf(t) = log(1 + (N − df(t) + 0.5) / (df(t) + 0.5))
+norm(d) = 1 − b + b · |d| / avgdl
+tf_bm25(t, d) = f(t, d) · (k1 + 1) / (f(t, d) + k1 · norm(d))
+puntaje(q, d) = Σ idf(t) · tf_bm25(t, d)
+```
+
+Con `k1 = 1.2` y `b = 0.75` por defecto. El idf se mantiene positivo para
+términos frecuentes gracias al `1 +`.
+
+`MATCH` tokeniza la consulta, busca cada término en el índice invertido,
+obtiene los candidatos, aplica TF-IDF o BM25 y devuelve los documentos
+ordenados por `SCORE()`.
+
+El detalle experimental, las gráficas y la comparación contra GIN están en
+[`benchmark/text_based/README.md`](../benchmark/text_based/README.md).
 
 ---
 
@@ -473,7 +498,8 @@ Límites:
 - El límite de memoria es una estimación, no el uso exacto del proceso.
 - El merge final junta en RAM todos los postings de un término.
 - Los ids de documento deben ser enteros.
-- El índice no se actualiza incrementalmente: si cambian los documentos, hay
-  que reconstruirlo.
-- No está integrado con transacciones, locks ni con el `IndexManager`.
-- Todavía no hay ranking: `get_postings` no ordena por relevancia.
+- El índice no se actualiza incrementalmente: si cambian los documentos, el
+  ejecutor lo reconstruye al detectar una nueva versión de la tabla.
+- No está integrado con transacciones ni locks.
+- `get_postings` no ordena por relevancia: el ranking lo aplican TF-IDF y
+  BM25 en una pasada sobre los postings.
