@@ -1,13 +1,13 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
-import pymupdf
+import fitz  
 
 
 @dataclass
 class PageText:
     page_number: int  # 1-indexed
-    text: str
+    raw_text: str
     char_count: int
 
 
@@ -17,6 +17,8 @@ class PDFExtractionResult:
     has_sufficient_text: bool
     total_pages: int = 0
     total_chars: int = 0
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
     pages: List[PageText] = field(default_factory=list)
     title_meta: str = ""
     author_meta: str = ""
@@ -29,7 +31,8 @@ def extract_native_pdf(
     min_chars_per_page: int = 40,
 ) -> PDFExtractionResult:
     """
-    Abre un PDF con PyMuPDF, verifica legibilidad estructural y extrae texto nativo.
+    Extrae texto nativo página por página usando PyMuPDF con sort=True
+    (indispensable para papers académicos de doble columna).
     """
     if not pdf_path.exists() or not pdf_path.is_file():
         return PDFExtractionResult(
@@ -52,7 +55,7 @@ def extract_native_pdf(
             return PDFExtractionResult(
                 is_valid_pdf=False,
                 has_sufficient_text=False,
-                error="PDF encriptado / protegido con contraseña",
+                error="PDF encriptado",
             )
 
         total_pages = len(doc)
@@ -72,36 +75,42 @@ def extract_native_pdf(
 
         for idx in range(total_pages):
             page = doc[idx]
-            raw_text = page.get_text("text") or ""
-            clean_text = raw_text.strip()
-            c_count = len(clean_text)
+            # sort=True ordena bloques de texto por coordenadas visuales (ej. columna izq -> der)
+            text = page.get_text("text", sort=True) or ""
+            stripped = text.strip()
+            c_count = len(stripped)
 
             if c_count >= min_chars_per_page:
                 extracted_pages.append(
                     PageText(
                         page_number=idx + 1,
-                        text=clean_text,
+                        raw_text=text,
                         char_count=c_count,
                     )
                 )
             total_chars += c_count
 
         has_sufficient = total_chars >= min_total_chars and len(extracted_pages) > 0
+        page_start = extracted_pages[0].page_number if extracted_pages else None
+        page_end = extracted_pages[-1].page_number if extracted_pages else None
 
         return PDFExtractionResult(
             is_valid_pdf=True,
             has_sufficient_text=has_sufficient,
             total_pages=total_pages,
             total_chars=total_chars,
+            page_start=page_start,
+            page_end=page_end,
             pages=extracted_pages,
             title_meta=title_meta,
             author_meta=author_meta,
+            error=None if has_sufficient else f"Texto insuficiente ({total_chars} chars)",
         )
     except Exception as e:
         return PDFExtractionResult(
             is_valid_pdf=False,
             has_sufficient_text=False,
-            error=f"Fallo leyendo páginas: {e}",
+            error=f"Error extrayendo páginas: {e}",
         )
     finally:
         doc.close()
