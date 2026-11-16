@@ -13,3 +13,5 @@ __pycache__/
 chuta_wal.log
 typst/
 .idea
+
+.venv/

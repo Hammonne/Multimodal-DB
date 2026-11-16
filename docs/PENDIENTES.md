@@ -47,16 +47,16 @@ Ya hecho en `avances-y-correcciones`, falta revisarlo y traerlo:
 - **Consola web con `.zip`:** probado contra el backend de Docker (subir, crear la tabla, importar, indexar
   y buscar). Falta probarlo haciendo clic en el navegador
 
-## Revisar en la Parte 3 (texto)
+## Parte 3 (texto): fórmulas corregidas (hecho)
 
-Los tests pasan, pero las fórmulas no coinciden con las de clase:
+Las fórmulas ya coinciden con las estándar y con las de clase:
 
-- **`text_based/tfidf.py`:** el peso es `tf / df`. El TF-IDF usual es `tf · log(N / df)`: el idf es
-  un logaritmo de N sobre df, no una división por df
-- **`text_based/bm25.py`:** el TF se calcula como `f / (f + k1 + norm)`. BM25 usa
-  `f · (k1 + 1) / (f + k1 · norm)`, con `norm = 1 − b + b · |d| / avgdl`. El idf
-  `log((N − df + 0.5) / (df + 0.5))` sale negativo para términos que están en más de la mitad de los
-  documentos; muchas implementaciones usan `log(1 + (N − df + 0.5) / (df + 0.5))` para evitarlo
+- **`text_based/tfidf.py`:** `tf · log10(N / df)`, con frecuencia cruda y similitud del coseno
+- **`text_based/bm25.py`:** `f · (k1 + 1) / (f + k1 · norm)`, con
+  `norm = 1 − b + b · |d| / avgdl` e `idf = log(1 + (N − df + 0.5) / (df + 0.5))`
+- Tests actualizados en `tests/text_based/test_tfidf.py` y `test_bm25.py`
+- Benchmark completo (TF-IDF vs BM25 vs GIN, 1k a 10k, P@10/R@10, tiempo,
+  espacio y memoria) en [`benchmark/text_based/README.md`](../benchmark/text_based/README.md)
 
 ### Texto en "Cómo funciona"
 
@@ -69,7 +69,7 @@ Con el mismo estilo que las otras secciones de la página:
 4. **El puntaje:** para los primeros resultados, cuánto aporta cada término con TF-IDF y con BM25
    (tf, idf, largo del documento contra el promedio, k1 y b), y cómo cambia el ranking
 
-Antes conviene corregir las fórmulas, para no explicar un cálculo que no es el de clase. El índice SPIMI
+Las fórmulas ya están corregidas, así que se puede explicar el cálculo real de clase. El índice SPIMI
 de las ~10 000 letras se arma en unos segundos.
 
 ## ¿Codebook de 2048 palabras? (experimento)

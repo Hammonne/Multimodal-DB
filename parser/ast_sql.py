@@ -16,6 +16,8 @@ class IndexKind(Enum):
     IVF_IDX = auto()      # vectoriales (2.4.2), sobre una columna con rutas de archivos
     HNSW_IDX = auto()
     SPIMI_IDX = auto()
+    TFIDF_IDX = auto()
+    BM25_IDX = auto()
 
 
 # Tipos de dato del catalogo

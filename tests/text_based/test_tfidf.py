@@ -62,14 +62,14 @@ def test_calcula_normas_tfidf():
 
         tfidf.build_stats()
 
-        # df(gato) = 2
-        # df(perro) = 2
-        # tf(gato, doc 1) = 1 + log10(2)
-        # tf(perro, doc 1) = 1
+        # N = 3, df(gato) = 2, df(perro) = 2
+        # tf(gato, doc 1) = 2, tf(perro, doc 1) = 1
+        # idf = log10(3 / 2)
 
+        idf = math.log10(3 / 2)
         expected = math.sqrt(
-            ((1 + math.log10(2)) / 2) ** 2
-            + (1 / 2) ** 2
+            (2 * idf) ** 2
+            + (1 * idf) ** 2
         )
 
         assert math.isclose(
@@ -165,6 +165,7 @@ def test_top_k():
                 {"id": 1, "lyrics": "gato"},
                 {"id": 2, "lyrics": "gato"},
                 {"id": 3, "lyrics": "gato"},
+                {"id": 4, "lyrics": "perro"},
             ],
         )
 

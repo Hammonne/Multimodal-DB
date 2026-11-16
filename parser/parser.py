@@ -242,8 +242,15 @@ class Parser:
             ci.tipo = IndexKind.HNSW_IDX
         elif self.match(Token.Type.SPIMI):
             ci.tipo = IndexKind.SPIMI_IDX
+        elif self.match(Token.Type.TF_IDF):
+            ci.tipo = IndexKind.TFIDF_IDX
+        elif self.match(Token.Type.BM25):
+            ci.tipo = IndexKind.BM25_IDX
         else:
-            self.error("se esperaba BTREE, HASH, BITMAP, RTREE, IVF, HNSW o SPIMI")
+            self.error(
+                "se esperaba BTREE, HASH, BITMAP, RTREE, IVF, HNSW, "
+                "SPIMI, TF_IDF o BM25"
+            )
 
         if self.match(Token.Type.CLUSTERED):
             ci.clustered = True
@@ -256,8 +263,13 @@ class Parser:
         # por el obligaria a copiar cada fila al heap, que ya es donde vive
         if ci.clustered and ci.tipo == IndexKind.BITMAP_IDX:
             self.error_semantico("un indice BITMAP no puede ser CLUSTERED")
-        if ci.clustered and ci.tipo in (IndexKind.IVF_IDX, IndexKind.HNSW_IDX, IndexKind.SPIMI_IDX):
-            self.error_semantico("un indice IVF o HNSW no puede ser CLUSTERED")
+        if ci.clustered and ci.tipo in (
+            IndexKind.IVF_IDX, IndexKind.HNSW_IDX, IndexKind.SPIMI_IDX,
+            IndexKind.TFIDF_IDX, IndexKind.BM25_IDX,
+        ):
+            self.error_semantico(
+                "un indice IVF, HNSW o de texto no puede ser CLUSTERED"
+            )
         return ci
 
     # DropTable ::= DROP TABLE id
@@ -810,13 +822,15 @@ class Parser:
         if not self.match(Token.Type.RPAREN):
             self.error("se esperaba ) al cerrar MATCH")
         if not self.match(Token.Type.USING):
-            self.error("MATCH requiere USING BM25 o USING TF_IDF")
+            self.error("MATCH requiere USING SPIMI, BM25 o TF_IDF")
         if self.match(Token.Type.BM25):
             expr.algoritmo = "bm25"
         elif self.match(Token.Type.TF_IDF):
             expr.algoritmo = "tfidf"
+        elif self.match(Token.Type.SPIMI):
+            expr.algoritmo = "spimi"
         else:
-            self.error("se esperaba BM25 o TF_IDF despues de USING")
+            self.error("se esperaba SPIMI, BM25 o TF_IDF despues de USING")
         return expr
 
     # OrderExpr ::= Distancia | SIMILARITY_SCORE ( ) | ColRef
