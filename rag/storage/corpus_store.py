@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import json
+from pathlib import Path
 
 from storage.storage_manager import StorageManager
 
@@ -159,6 +161,39 @@ class CorpusStore:
         if missing:
             raise KeyError(f"no existen los chunk_id: {missing}")
         return [by_id[chunk_id] for chunk_id in chunk_ids]
+
+    def export_jsonl(self, filename: str | Path) -> int:
+        """Exporta chunks al formato que consume ``SPIMIIndex``."""
+        papers = {
+            int(values[0]): str(values[1])
+            for _, values in self._papers.scan()
+        }
+        output_path = Path(filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        count = 0
+        with output_path.open("w", encoding="utf-8") as output:
+            for _, values in self._chunks.scan():
+                chunk_id = int(values[0])
+                paper_id = int(values[1])
+                try:
+                    title = papers[paper_id]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"el chunk {chunk_id} referencia un paper inexistente"
+                    ) from exc
+                json.dump(
+                    {
+                        "id": chunk_id,
+                        "lyrics": str(values[6]),
+                        "title": title,
+                    },
+                    output,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                output.write("\n")
+                count += 1
+        return count
 
     def _ensure_table(
         self,

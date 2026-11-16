@@ -7,3 +7,5 @@ faiss-cpu
 hnswlib
 scikit-learn
 matplotlib
+torch>=2.0
+transformers>=4.40
