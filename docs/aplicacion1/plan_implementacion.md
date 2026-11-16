@@ -138,7 +138,7 @@ debe validar solicitudes, llamar al servicio RAG y serializar respuestas.
 
 Esta fase debe ejecutarse antes de la preparación manual del corpus.
 
-### 5.1 Importar `pwc.csv`
+### 5.1 [LISTO] Importar `pwc.csv`
 
 Crear `scripts/import_pwc_catalog.py` para:
 
@@ -160,7 +160,7 @@ Crear `scripts/import_pwc_catalog.py` para:
 El catálogo debe conservarse aunque el PDF no pueda descargarse. Un registro de
 catálogo no implica que exista un documento local utilizable por el RAG.
 
-### 5.2 Descargar los documentos
+### 5.2 [LISTO] Descargar los documentos
 
 Crear `scripts/download_papers.py` con estas reglas:
 
@@ -212,7 +212,7 @@ extracted
 failed
 ```
 
-### 5.3 Resolver enlaces HTML
+### 5.3 R[LISTO] esolver enlaces HTML
 
 Los enlaces a páginas de CVPR, ICCV, NeurIPS u otros sitios no deben
 interpretarse automáticamente como PDF sin validar el contenido. Para la
