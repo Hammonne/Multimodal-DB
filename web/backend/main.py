@@ -28,6 +28,7 @@ from executor import ExecuteVisitor  # noqa: E402
 from storage.storage_manager import StorageManager  # noqa: E402
 from web.backend.text_search import text_search  # noqa: E402
 from web.backend.multimedia_search import multimedia_search  # noqa: E402
+from rag.llm import OllamaClient  # noqa: E402
 
 
 class QueryRequest(BaseModel):
@@ -107,6 +108,7 @@ app.add_middleware(
 )
 
 _storage = StorageManager(wal_path=os.getenv("WAL_PATH", "chuta_wal.log"))
+_llm_client = OllamaClient()
 _sessions: dict[str, ExecuteVisitor] = {}
 UPLOAD_DIR = ROOT / "data" / "uploads"
 SQL_INT_MIN = -(2**31)
@@ -145,6 +147,24 @@ def table_metadata(name: str, metadata: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/rag/health")
+def rag_health() -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "provider": "ollama",
+        "model": _llm_client.config.model,
+        "ollama_url": _llm_client.config.base_url,
+        "provider_configured": True,
+        "ollama_available": False,
+    }
+    try:
+        _llm_client.check_connection()
+    except RuntimeError as error:
+        result["error"] = str(error)
+    else:
+        result["ollama_available"] = True
+    return result
 
 
 @app.post("/api/import/csv", response_model=CsvUploadResponse)
