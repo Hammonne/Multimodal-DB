@@ -334,6 +334,107 @@ class IndexManager:
         table.attach_index(column_index, index)
         return index
 
+
+
+
+
+    def create_embedding_index(
+        self,
+        index_name: str,
+        table: Table,
+        column_index: int,
+        column_name: str,
+        index_type: str,
+        embeddings,
+        rids,
+        metric: str = "coseno",
+        nlist: int = 100,
+        M: int = 16,
+        ef_construction: int = 100
+    ) -> VectorSecondaryIndex:
+        """
+        Crea un índice HNSW o IVF a partir de embeddings precomputados.
+
+        Esta función es independiente de create_vector_index():
+        - no extrae características multimedia;
+        - no usa SIFT/MFCC;
+        - no usa Vectorizador;
+        - no adjunta el índice a Table;
+        - los embeddings son generados por la aplicación externa.
+
+        El índice se registra en el catálogo como:
+            embedding_hnsw
+        o:
+            embedding_ivf
+        """
+
+        index_type = index_type.strip().lower()
+
+        if index_type not in ("hnsw", "ivf"):
+            raise ValueError(
+                "Un índice de embeddings debe ser HNSW o IVF."
+            )
+
+        metric = metric.strip().lower()
+
+        if metric not in (
+            "coseno",
+            "cosine",
+            "cos",
+            "euclidiana",
+            "euclidean",
+            "l2",
+            "producto_punto",
+            "dot",
+            "ip",
+            "inner_product"
+        ):
+            raise ValueError(
+                f"Métrica no soportada: '{metric}'."
+            )
+
+        if len(embeddings) != len(rids):
+            raise ValueError(
+                f"La cantidad de embeddings ({len(embeddings)}) no coincide "
+                f"con la cantidad de RIDs ({len(rids)})."
+            )
+
+        index = VectorSecondaryIndex(
+            f"{index_name}.npz",
+            index_type
+        )
+
+        index.construir_desde_vectores(
+            embeddings,
+            rids,
+            nlist=nlist,
+            M=M,
+            ef_construction=ef_construction,
+            metrica=metric
+        )
+
+        self.catalog.register_index(
+            index_name=index_name,
+            table_name=table.name,
+            column_name=column_name,
+            column_index=column_index,
+            index_type=f"embedding_{index_type}"
+        )
+
+        # Importante:
+        # NO hacemos table.attach_index().
+        #
+        # Este índice no debe recibir automáticamente los insert/update/delete
+        # de Table como si fuera un índice multimedia.
+        self.open_indexes[index_name] = index
+
+        return index
+
+
+
+
+    
+
     def _load_vector_index(self, index_name, table, column_index, index_type):
         # se reabre de disco; si la tabla cambió con el índice cerrado se reconstruye
         index = VectorSecondaryIndex(f"{index_name}.npz", index_type)
@@ -393,6 +494,37 @@ class IndexManager:
                 elif idx_type in ("ivf", "hnsw"):
                     self._load_vector_index(index_name, table, col_idx, idx_type)
 
+
+
+
+
+
+
+
+                elif idx_type == "embedding_hnsw":
+                    self._load_embedding_index(
+                        index_name,
+                        table,
+                        col_idx,
+                        "hnsw"
+                    )
+
+                elif idx_type == "embedding_ivf":
+                    self._load_embedding_index(
+                        index_name,
+                        table,
+                        col_idx,
+                        "ivf"
+                    )
+
+
+
+
+
+
+
+
+
                 elif idx_type == "bitmap":
                     # El bitmap sí persiste sus páginas: se reabre el archivo
                     # y el directorio clave -> (pagina, slot) se rearma solo.
@@ -401,6 +533,90 @@ class IndexManager:
                     )
                     self.open_indexes[index_name] = idx
                     table.attach_index(col_idx, idx)
+
+
+
+
+
+
+    def _load_embedding_index(
+        self,
+        index_name,
+        table,
+        column_index,
+        index_type
+    ):
+        """
+        Reabre un índice de embeddings persistido.
+
+        A diferencia de _load_vector_index(), no reconstruye el índice
+        usando las rutas de archivos de la tabla.
+        """
+
+        if index_type not in ("hnsw", "ivf"):
+            raise ValueError(
+                f"Tipo de índice de embeddings inválido: '{index_type}'"
+            )
+
+        index = VectorSecondaryIndex(
+            f"{index_name}.npz",
+            index_type
+        )
+
+        n_filas = sum(1 for _ in table.scan())
+
+        if not index.cargar(n_filas):
+            raise ValueError(
+                f"El índice de embeddings '{index_name}' no coincide "
+                f"con la cantidad actual de filas de la tabla."
+            )
+
+        self.open_indexes[index_name] = index
+
+        # NO attach_index().
+        return index
+
+
+    def search_embedding_index(
+        self,
+        index_name: str,
+        embedding,
+        k: int = 10,
+        nprobe: int = 10,
+        ef_search: int = 50,
+        rids_permitidos=None
+    ):
+        """
+        Busca directamente en un índice de embeddings ya abierto.
+
+        Devuelve:
+            [(RID, vector), ...]
+        """
+
+        if index_name not in self.open_indexes:
+            raise ValueError(
+                f"El índice '{index_name}' no está abierto."
+            )
+
+        index = self.open_indexes[index_name]
+
+        if not isinstance(index, VectorSecondaryIndex):
+            raise ValueError(
+                f"'{index_name}' no es un índice vectorial."
+            )
+
+        if index.indice is None and not index.pendientes:
+            return []
+
+        return index.buscar_embedding(
+            embedding,
+            k=k,
+            nprobe=nprobe,
+            ef_search=ef_search,
+            rids_permitidos=rids_permitidos
+        )
+
+
 
     def drop_index(self, index_name: str):
         """Elimina un índice y su archivo físico .idx."""

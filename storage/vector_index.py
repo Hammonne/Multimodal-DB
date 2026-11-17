@@ -349,6 +349,114 @@ class VectorSecondaryIndex:
             if os.path.exists(f):
                 os.remove(f)
 
+    def construir_desde_vectores(
+        self,
+        vectores,
+        rids,
+        nlist=100,
+        M=16,
+        ef_construction=100,
+        metrica=METRICA_INDICE
+    ):
+        """
+        Construye el índice directamente a partir de vectores ya calculados
+        fuera de chutaDB.
+
+        Esta ruta se utiliza para embeddings de IA, por ejemplo:
+        ArcFace / FaceNet.
+
+        No modifica ni utiliza Vectorizador, ExtractFeatures, SIFT, MFCC
+        ni ModeloMultimedia.
+        """
+        X = np.asarray(vectores, dtype=np.float32)
+
+        if X.ndim != 2:
+            raise ValueError(
+                "Los vectores deben tener forma (n_filas, dimensiones)."
+            )
+
+        if len(X) == 0:
+            raise ValueError(
+                "No se puede construir un índice vectorial vacío."
+            )
+
+        if len(X) != len(rids):
+            raise ValueError(
+                f"La cantidad de vectores ({len(X)}) no coincide con "
+                f"la cantidad de RIDs ({len(rids)})."
+            )
+
+        self.nlist = nlist
+        self.M = M
+        self.ef_construction = ef_construction
+        self.tipo = "embedding"
+
+        # Se conserva exactamente la correspondencia:
+        # posición del vector en el índice -> RID de la tabla.
+        self.rids = list(rids)
+        self.borrados = set()
+        self.pendientes = []
+        self.pendientes_media = []
+
+        if self.tipo_indice == "ivf":
+            self.indice = IVF(
+                nlist=max(1, min(nlist, len(X))),
+                metrica=metrica
+            )
+            self.indice.entrenar(X).agregar(X)
+
+        elif self.tipo_indice == "hnsw":
+            self.indice = HNSW(
+                M=M,
+                ef_construction=ef_construction,
+                metrica=metrica
+            )
+            self.indice.agregar(X)
+
+        else:
+            raise ValueError(
+                f"Tipo de índice vectorial no soportado: "
+                f"'{self.tipo_indice}'"
+            )
+
+        self.guardar()
+        return self
+
+    def buscar_embedding(
+        self,
+        embedding,
+        k=10,
+        nprobe=10,
+        ef_search=50,
+        rids_permitidos=None
+    ):
+        """
+        Busca un embedding ya calculado.
+
+        Es un wrapper separado de knn() para no alterar el comportamiento
+        de las búsquedas multimedia existentes.
+        """
+        q = np.asarray(embedding, dtype=np.float32)
+
+        if q.ndim != 1:
+            q = q.reshape(-1)
+
+        if self.indice is None and not self.pendientes:
+            return []
+
+        return self.knn(
+            q,
+            k,
+            nprobe=nprobe,
+            ef_search=ef_search,
+            rids_permitidos=rids_permitidos
+        )
+
+
+
+
+
+
 
 def score(metrica, q, v):
     # SIMILARITY_SCORE(): mayor = más parecido, así ORDER BY score DESC sirve con las tres

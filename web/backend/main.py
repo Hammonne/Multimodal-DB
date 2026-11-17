@@ -31,6 +31,12 @@ from web.backend.multimedia_search import multimedia_search  # noqa: E402
 from web.backend.carga_media import preparar_zip, tipo_media  # noqa: E402
 
 
+from face_recognition_app.db_schema import create_face_recognition_tables
+from face_recognition_app.db import FaceRecognitionDB
+from face_recognition_app.api import create_face_router
+
+
+
 class QueryRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=100_000)
 
@@ -108,6 +114,22 @@ app.add_middleware(
 )
 
 _storage = StorageManager(wal_path=os.getenv("WAL_PATH", "chuta_wal.log"))
+
+
+create_face_recognition_tables(_storage)
+
+_face_db = FaceRecognitionDB(_storage)
+
+app.include_router(
+    create_face_router(_face_db)
+)
+
+
+
+
+
+
+
 _sessions: dict[str, ExecuteVisitor] = {}
 UPLOAD_DIR = ROOT / "data" / "uploads"
 SQL_INT_MIN = -(2**31)
