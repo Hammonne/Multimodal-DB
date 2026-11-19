@@ -26,6 +26,7 @@ services:
       - ./docker-data:/app/docker-data
     environment:
       WAL_PATH: /app/docker-data/chuta_wal.log
+      OLLAMA_BASE_URL: http://ollama:11434
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
@@ -34,6 +35,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      ollama:
+        condition: service_started
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
 
   frontend:
     build:
@@ -49,3 +59,4 @@ services:
 
 volumes:
   postgres_data:
+  ollama_data:

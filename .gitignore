@@ -14,4 +14,9 @@ chuta_wal.log
 typst/
 .idea
 
+# Secretos
+.env
+*.env
+.env.*
+!.env.example
 .venv/

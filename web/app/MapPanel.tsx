@@ -23,14 +23,24 @@ export default function MapPanel({ points, selectedTable }: MapPanelProps) {
 
   useEffect(() => {
     if (!mapElement.current || mapRef.current) return;
-    const map = L.map(mapElement.current, { zoomControl: true }).setView([-12.0464, -77.0428], 11);
+    const element = mapElement.current;
+    const map = L.map(element, { zoomControl: true }).setView([-12.0464, -77.0428], 11);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "&copy; OpenStreetMap contributors",
     }).addTo(map);
     mapRef.current = map;
     layerRef.current = L.layerGroup().addTo(map);
-    window.setTimeout(() => map.invalidateSize(), 0);
-    return () => { map.remove(); mapRef.current = null; layerRef.current = null; };
+    const resizeTimer = window.setTimeout(() => {
+      if (mapRef.current === map && element.isConnected) {
+        map.invalidateSize();
+      }
+    }, 0);
+    return () => {
+      window.clearTimeout(resizeTimer);
+      map.remove();
+      mapRef.current = null;
+      layerRef.current = null;
+    };
   }, []);
 
   useEffect(() => {

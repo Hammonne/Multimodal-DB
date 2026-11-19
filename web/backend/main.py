@@ -28,6 +28,11 @@ from executor import ExecuteVisitor  # noqa: E402
 from storage.storage_manager import StorageManager  # noqa: E402
 from web.backend.text_search import text_search  # noqa: E402
 from web.backend.multimedia_search import multimedia_search  # noqa: E402
+from rag.llm import build_llm_client  # noqa: E402
+from rag.service import RAGService  # noqa: E402
+from rag.ingestion.cleaner import clean_document_pages  # noqa: E402
+from rag.ingestion.chunker import chunk_pages  # noqa: E402
+from rag.ingestion.pdf_reader import extract_native_pdf  # noqa: E402
 from web.backend.carga_media import preparar_zip, tipo_media  # noqa: E402
 
 
@@ -96,6 +101,22 @@ class MultimediaSearchRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=100)
 
 
+class RagIngestRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str | None = None
+
+
+class RagBuildRequest(BaseModel):
+    text: bool = True
+    vector: bool = True
+
+
+class RagAskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=10_000)
+    mode: str = Field(default="hybrid")
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
 BENCHMARK_DIR = ROOT / "benchmark" / "multimedia" / "graficas"
 TEXT_BENCHMARK_PATH = ROOT / "benchmark" / "text" / "results_gin.json"
 
@@ -114,6 +135,8 @@ app.add_middleware(
 )
 
 _storage = StorageManager(wal_path=os.getenv("WAL_PATH", "chuta_wal.log"))
+_llm_client = build_llm_client()
+_rag_service = RAGService(ROOT)
 
 
 create_face_recognition_tables(_storage)
@@ -168,6 +191,118 @@ def table_metadata(name: str, metadata: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/rag/health")
+def rag_health() -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "provider": _llm_client.config.provider,
+        "model": _llm_client.config.model,
+        "ollama_url": _llm_client.config.base_url,
+        "provider_configured": True,
+        "ollama_available": False,
+        "corpus_available": _rag_service.source_path.is_file(),
+        "text_index_available": _rag_service.text_index_path.with_suffix(".json").is_file(),
+        "vector_index_available": _rag_service.hnsw_path.is_file(),
+    }
+    try:
+        _llm_client.check_connection()
+    except RuntimeError as error:
+        result["error"] = str(error)
+    else:
+        result["ollama_available"] = True
+    return result
+
+
+@app.post("/api/rag/ingest")
+def rag_ingest(request: RagIngestRequest) -> dict[str, Any]:
+    filename = Path(request.filename).name
+    if Path(filename).suffix.lower() != ".pdf" or filename != request.filename:
+        raise HTTPException(status_code=400, detail="filename debe ser un nombre PDF simple")
+    pdf_dir = ROOT / "data" / "rag" / "pdfs"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / filename
+    if request.content_base64 is not None:
+        try:
+            pdf_path.write_bytes(base64.b64decode(request.content_base64, validate=True))
+        except (ValueError, base64.binascii.Error) as error:
+            raise HTTPException(status_code=400, detail="content_base64 no es válido") from error
+    if not pdf_path.is_file():
+        raise HTTPException(status_code=404, detail=f"no existe el PDF: {pdf_path}")
+
+    extraction = extract_native_pdf(pdf_path)
+    if not extraction.is_valid_pdf or not extraction.has_sufficient_text:
+        raise HTTPException(status_code=422, detail=extraction.error or "PDF no procesable")
+    pages = clean_document_pages(extraction.pages)
+    chunks = chunk_pages(str(pdf_path.stem), pages)
+    if not chunks:
+        raise HTTPException(status_code=422, detail="el PDF no produjo chunks")
+
+    source = _rag_service.source_path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if source.is_file():
+        existing = source.read_text(encoding="utf-8").splitlines()
+    next_id = len(existing) + 1
+    with source.open("a", encoding="utf-8") as output:
+        for offset, chunk in enumerate(chunks):
+            output.write(
+                json.dumps(
+                    {
+                        "id": next_id + offset,
+                        "paper_id": next_id,
+                        "chunk_id": next_id + offset,
+                        "title": extraction.title_meta or pdf_path.stem,
+                        "authors": extraction.author_meta or "Unknown",
+                        "source_file": str(pdf_path),
+                        "page_start": chunk.page_start,
+                        "page_end": chunk.page_end,
+                        "text": chunk.text,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    return {
+        "filename": filename,
+        "chunks": len(chunks),
+        "pages": extraction.total_pages,
+        "source_file": str(pdf_path),
+    }
+
+
+@app.post("/api/rag/build")
+def rag_build(request: RagBuildRequest) -> dict[str, Any]:
+    if not request.text and not request.vector:
+        raise HTTPException(status_code=400, detail="activa text, vector o ambos")
+    try:
+        return _rag_service.build(text=request.text, vector=request.vector)
+    except (FileNotFoundError, ValueError, RuntimeError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/rag/ask")
+def rag_ask(request: RagAskRequest) -> dict[str, Any]:
+    try:
+        return _rag_service.ask(
+            request.question,
+            mode=request.mode,
+            top_k=request.top_k,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.get("/api/rag/papers")
+def rag_papers() -> dict[str, Any]:
+    try:
+        return {"papers": _rag_service.papers()}
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.post("/api/import/csv", response_model=CsvUploadResponse)

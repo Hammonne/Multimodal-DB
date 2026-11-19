@@ -370,6 +370,33 @@ class SPIMIIndex:
 
         return decode_postings(UINT32.pack(count) + postings_bytes)
 
+    def get_postings_count(self, term):
+        if not self.loaded:
+            self.load()
+
+        term = term.casefold()
+        if term not in self.term_offsets:
+            return 0
+
+        index_filename, _ = self.artifact_paths()
+        with open(index_filename, "rb") as file:
+            file.seek(self.term_offsets[term])
+            term_length = UINT32.unpack(read_exact(file, 4))[0]
+            read_exact(file, term_length)
+            return UINT32.unpack(read_exact(file, 4))[0]
+
+    def iter_postings_counts(self):
+        if not self.loaded:
+            self.load()
+
+        index_filename, _ = self.artifact_paths()
+        with open(index_filename, "rb") as file:
+            for term, offset in self.term_offsets.items():
+                file.seek(offset)
+                term_length = UINT32.unpack(read_exact(file, 4))[0]
+                read_exact(file, term_length)
+                yield term, UINT32.unpack(read_exact(file, 4))[0]
+
     def get_doc_length(self, doc_id):
         try:
             return self.doc_lengths.get(normalize_doc_id(doc_id))
