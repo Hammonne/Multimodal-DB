@@ -33,6 +33,40 @@ type TransactionDetail = { transaction_id: number; status: string; last_lsn: num
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const POR_PAGINA = 16;
 const starterSql = "SELECT *\nFROM ventas\nWHERE id BETWEEN 1 AND 10\nORDER BY id ASC\nLIMIT 25;";
+const IMAGE_PATH = /\.(jpe?g|png|webp|bmp)$/i;
+const AUDIO_PATH = /\.(mp3|wav|ogg|flac|m4a)$/i;
+
+function mediaKind(value: unknown): "image" | "audio" | null {
+  if (typeof value !== "string") return null;
+  const path = value.trim();
+  if (!path || path.length > 2048) return null;
+  if (IMAGE_PATH.test(path)) return "image";
+  if (AUDIO_PATH.test(path)) return "audio";
+  return null;
+}
+
+function mediaUrl(path: string) {
+  return `${API}/api/media?path=${encodeURIComponent(path)}`;
+}
+
+function ResultValue({ value }: { value: unknown }) {
+  const text = value === null || value === undefined ? "NULL" : String(value);
+  const kind = mediaKind(value);
+  if (!kind) return <>{text}</>;
+  const src = mediaUrl(text);
+  if (kind === "image") {
+    return <div className={styles.resultMedia}>
+      <a href={src} target="_blank" rel="noreferrer" title={text}>
+        <img className={styles.resultMediaImage} src={src} alt={text} loading="lazy" />
+      </a>
+      <small className={styles.resultMediaPath} title={text}>{text}</small>
+    </div>;
+  }
+  return <div className={styles.resultMedia}>
+    <audio className={styles.resultMediaAudio} controls preload="none" src={src} />
+    <small className={styles.resultMediaPath} title={text}>{text}</small>
+  </div>;
+}
 
 function apiErrorMessage(detail: unknown, fallback: string): string {
   if (typeof detail === "string" && detail.trim()) return detail;
@@ -755,7 +789,7 @@ export default function Home() {
 
           <section className={`${styles.panel} ${styles.queryPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>03 / WORKSPACE</span><h2 className={styles.panelTitle}>Consultas</h2></div><div className={styles.queryActions}><button className={styles.iconButton} onClick={copySql} title="Copiar SQL"><Copy size={14} /></button>{loading && <button className={styles.stopButton} onClick={cancelQuery}><CircleStop size={14} /> PARAR</button>}<button className={styles.runButton} onClick={() => runQuery()} disabled={loading}><Play size={14} fill="currentColor" /> {loading ? "EJECUTANDO" : "EJECUTAR"}<kbd className={styles.shortcut}>⌘ ↵</kbd></button></div></div><div className={styles.editorWrap}><div className={styles.editorGutter} ref={gutterRef}>{sql.split("\n").map((_, index) => <span key={index}>{String(index + 1).padStart(2, "0")}</span>)}</div><textarea ref={editorRef} className={styles.editorInput} aria-label="Editor de consulta SQL" spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)} onScroll={syncEditorScroll} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") runQuery(); }} /></div><div className={styles.csvDropzone} onDragOver={(event) => { event.preventDefault(); setCsvDragging(true); }} onDragLeave={() => setCsvDragging(false)} onDrop={handleCsvDrop}><input id="csv-upload" type="file" accept=".csv,.json,.jsonl,.zip,.jpg,.jpeg,.png,.webp,.bmp,.mp3,.wav,.ogg,.flac,.m4a,text/csv,application/json,audio/*,image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadCsv(file); event.currentTarget.value = ""; }} /><label htmlFor="csv-upload"><FileBox size={15} /> {csvUploading ? "CARGANDO ARCHIVO..." : csvDragging ? "SUELTA EL ARCHIVO AQUÍ" : "ARRASTRA CSV, JSON, IMAGEN, AUDIO O UN .ZIP CON TU DATASET"}</label></div><div className={styles.queryMeta}><span><Terminal size={13} /> SQL / ANSI-LIKE</span><span>{sql.length} caracteres {duration !== null && `· ${duration.toFixed(0)} ms`}</span></div>{error && <div className={styles.error}><AlertCircle size={15} /><span>{error}</span></div>}{history.length > 0 && <div className={styles.historyStrip}><History size={13} /><span>HISTORIAL</span>{history.slice(0, 3).map((item, index) => <button key={`${item.at}-${index}`} onClick={() => setSql(item.sql)} className={item.status === "error" ? styles.historyError : ""}>{item.at} · {item.rows} filas</button>)}</div>}</section>
 
-          <section className={`${styles.panel} ${styles.resultsPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>04 / OUTPUT</span><h2 className={styles.panelTitle}>Resultados <em className={styles.resultCount}>{result.row_count ? `${result.row_count} filas` : ""}</em></h2></div><div className={styles.searchBadge}><Search size={14} /> <span>{result.columns.length ? "QUERY COMPLETE" : "WAITING"}</span></div></div><div className={styles.resultTableWrap}>{result.columns.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}>{result.columns.map((column) => <th className={styles.resultHeader} key={column}>{column}</th>)}</tr></thead><tbody>{visibleRows.map((row, rowIndex) => <tr className={styles.resultRow} key={rowIndex}>{row.map((value, valueIndex) => <td className={styles.resultCell} key={valueIndex}>{String(value ?? "NULL")}</td>)}</tr>)}</tbody></table> : <div className={styles.empty}><Table2 size={25} /><p>{result.message}</p></div>}</div>{result.columns.length > 0 && <div className={styles.pagination}><span>ROWS {page * pageSize + 1}-{Math.min((page + 1) * pageSize, result.rows.length)} / {result.rows.length}</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>PREV</button><b>{String(page + 1).padStart(2, "0")} / {String(pageCount).padStart(2, "0")}</b><button disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)}>NEXT</button></div></div>}</section>
+          <section className={`${styles.panel} ${styles.resultsPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>04 / OUTPUT</span><h2 className={styles.panelTitle}>Resultados <em className={styles.resultCount}>{result.row_count ? `${result.row_count} filas` : ""}</em></h2></div><div className={styles.searchBadge}><Search size={14} /> <span>{result.columns.length ? "QUERY COMPLETE" : "WAITING"}</span></div></div><div className={styles.resultTableWrap}>{result.columns.length ? <table className={styles.resultTable}><thead><tr className={styles.resultRow}>{result.columns.map((column) => <th className={styles.resultHeader} key={column}>{column}</th>)}</tr></thead><tbody>{visibleRows.map((row, rowIndex) => <tr className={styles.resultRow} key={rowIndex}>{row.map((value, valueIndex) => <td className={styles.resultCell} key={valueIndex}><ResultValue value={value} /></td>)}</tr>)}</tbody></table> : <div className={styles.empty}><Table2 size={25} /><p>{result.message}</p></div>}</div>{result.columns.length > 0 && <div className={styles.pagination}><span>ROWS {page * pageSize + 1}-{Math.min((page + 1) * pageSize, result.rows.length)} / {result.rows.length}</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>PREV</button><b>{String(page + 1).padStart(2, "0")} / {String(pageCount).padStart(2, "0")}</b><button disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)}>NEXT</button></div></div>}</section>
           <section className={`${styles.panel} ${styles.spatialPanel}`}><div className={styles.panelHeader}><div><span className={styles.eyebrow}>05 / SPATIAL</span><h2 className={styles.panelTitle}>Mapa de puntos</h2></div><span className={styles.costTag}>{spatialPoints.length ? `${spatialPoints.length} PUNTOS` : "SIN DATOS"}</span></div><MapPanel points={spatialPoints} selectedTable={selected} /></section>
         </div>
       )}

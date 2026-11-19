@@ -82,3 +82,9 @@
 .paginador { justify-content: center; margin: 4px 0 16px; }
 .paginador button { min-width: 38px; height: 32px; border: 1px solid var(--line); background: rgba(255,255,255,.35); font-size: 18px; line-height: 1; }
 .paginador button:hover:not(:disabled) { border-color: var(--amber); background: var(--amber-soft); }
+
+/* imágenes y audios devueltos por una consulta SQL en la consola */
+.resultMedia { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.resultMediaImage { width: 92px; height: 92px; display: block; object-fit: cover; border: 1px solid var(--line); background: #e7e4d9; }
+.resultMediaAudio { width: 210px; max-width: 34vw; height: 32px; }
+.resultMediaPath { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; }

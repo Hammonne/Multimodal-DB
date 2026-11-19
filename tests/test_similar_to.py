@@ -121,6 +121,20 @@ class TestSimilarTo(unittest.TestCase):
         with self.assertRaises(SqlError):
             parsear("CREATE INDEX ON canciones (audio) USING HNSW CLUSTERED")
 
+    def test_create_table_con_columnas_image_y_audio(self):
+        from ast_sql import DataType
+        s = uno("CREATE TABLE medios (id INT PRIMARY KEY, foto IMAGE, audio AUDIO, "
+                "portada image, sonido audio) USING HEAP")
+        self.assertEqual(
+            [c.tipo for c in s.columnas],
+            [DataType.INT_TYPE, DataType.IMAGE_TYPE, DataType.AUDIO_TYPE,
+             DataType.IMAGE_TYPE, DataType.AUDIO_TYPE],
+        )
+        self.assertEqual(
+            [c.nombre for c in s.columnas],
+            ["id", "foto", "audio", "portada", "sonido"],
+        )
+
     def test_errores(self):
         malos = {
             "SELECT * FROM t WHERE SIMILAR_TO('a.jpg', k=3) USING HNSW WITH METRIC=manhattan": "metrica desconocida",

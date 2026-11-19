@@ -617,6 +617,43 @@ def multimedia_asset(asset_path: str) -> FileResponse:
     return FileResponse(asset)
 
 
+@app.get("/api/media")
+def query_media(path: str) -> FileResponse:
+    """Sirve una imagen o un audio devuelto por una consulta SQL.
+
+    Las rutas multimedia se guardan relativas a data/ (lo habitual) o al
+    proyecto, pero una tabla también puede contener una ruta absoluta. En
+    todos los casos solo se exponen archivos con extensión multimedia
+    dentro del proyecto para que el visor de resultados pueda mostrar la
+    imagen o reproducir el audio sin salir de la consola.
+    """
+    raw = (path or "").strip().replace("\\", "/")
+    if not raw:
+        raise HTTPException(status_code=404, detail="ruta multimedia vacía")
+
+    root = ROOT.resolve()
+    data_root = (root / "data").resolve()
+    candidate = Path(raw)
+    candidates = [candidate] if candidate.is_absolute() else [
+        root / raw,
+        data_root / raw,
+    ]
+
+    for asset in candidates:
+        try:
+            resolved = asset.resolve()
+        except OSError:
+            continue
+        if resolved.suffix.lower() not in MEDIA_EXTENSIONS:
+            continue
+        if root not in resolved.parents:
+            continue
+        if resolved.is_file():
+            return FileResponse(resolved)
+
+    raise HTTPException(status_code=404, detail="recurso multimedia no encontrado")
+
+
 @app.get("/api/multimedia/benchmarks")
 def multimedia_benchmarks() -> dict[str, Any]:
     result_path = BENCHMARK_DIR / "resultados.json"
