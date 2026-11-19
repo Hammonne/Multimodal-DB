@@ -101,6 +101,14 @@ class MultimediaSearchRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=100)
 
 
+class MultimediaFileSearchRequest(BaseModel):
+    index: str = Field(default="hnsw")
+    metric: str = Field(default="coseno")
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=30_000_000)
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
 class RagIngestRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     content_base64: str | None = None
@@ -516,6 +524,11 @@ def text_benchmarks() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="results_gin.json no es JSON válido") from error
 
 
+@app.on_event("startup")
+def precalentar_multimedia() -> None:
+    multimedia_search.precalentar()
+
+
 @app.post("/api/multimedia/search")
 def search_multimedia(request: MultimediaSearchRequest) -> dict[str, Any]:
     try:
@@ -532,10 +545,62 @@ def search_multimedia(request: MultimediaSearchRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.get("/api/multimedia/examples")
-def multimedia_examples(kind: str = "sift") -> dict[str, Any]:
+@app.post("/api/multimedia/search-file")
+def search_multimedia_file(request: MultimediaFileSearchRequest) -> dict[str, Any]:
+    # la consulta es una imagen o un audio subido desde la web, no un objeto de la base
+    filename = Path(request.filename).name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in MEDIA_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="sube una imagen (jpg, png...) o un audio (mp3, wav...)")
     try:
-        return {"kind": kind, "ids": multimedia_search.examples(kind)}
+        content = base64.b64decode(request.content_base64, validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="el contenido no es Base64 válido") from error
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="el archivo supera el límite de 20 MB")
+    destino = ROOT / "data" / "uploads" / "consultas"
+    destino.mkdir(parents=True, exist_ok=True)
+    seguro = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename).stem)[:80] or "consulta"
+    path = destino / f"{int(time.time() * 1000)}_{seguro}{suffix}"
+    path.write_bytes(content)
+    try:
+        return multimedia_search.search_file(path, request.index, request.metric, request.top_k)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (ValueError, RuntimeError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/multimedia/consultas-ejemplo")
+def multimedia_consultas_ejemplo() -> dict[str, Any]:
+    # fotos reales de discogs y portadas modificadas (data augmentation) para probar "subir archivo"
+    data = ROOT / "data"
+    salida = []
+
+    def filas(nombre: str) -> list[dict[str, str]]:
+        ruta = data / nombre
+        if not ruta.is_file():
+            return []
+        with ruta.open(newline="", encoding="utf-8") as fh:
+            return list(csv.DictReader(fh))
+
+    reales = [f for f in filas("fotos_reales.csv") if f.get("tipo") == "principal"]
+    for f in reales[:6]:
+        salida.append({"path": f["path"], "etiqueta": f"foto real ({f['formato']})", "original": f["cover_path"]})
+    aumentadas = filas("consultas_aumentadas.csv")
+    if aumentadas:
+        primera = aumentadas[0]["album_id"]
+        for f in aumentadas:
+            if f["album_id"] == primera:
+                salida.append({"path": f["path"], "etiqueta": f["cambio"], "original": f["original"]})
+    return {"consultas": salida}
+
+
+@app.get("/api/multimedia/examples")
+def multimedia_examples(kind: str = "sift", grupo: str = "", offset: int = 0, limit: int = 16) -> dict[str, Any]:
+    try:
+        return {"kind": kind, "grupo": grupo,
+                **multimedia_search.examples(kind, max(1, min(limit, 64)), grupo, max(0, offset))}
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
