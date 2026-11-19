@@ -1,0 +1,13 @@
+# Dependencias extra de la app de reconocimiento facial
+# (además de web/backend/requirements.txt). Python 3.14, CPU.
+#
+#   pip install -r web/backend/requirements.txt
+#   pip install -r face_recognition_app/requirements.txt
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install --no-deps facenet-pytorch      # fija versiones de torch inexistentes para 3.14
+python-multipart
+Pillow
+onnxruntime
+insightface
+pytest
+httpx
