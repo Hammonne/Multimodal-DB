@@ -32,9 +32,7 @@ class BM25:
             self.ready = True
             return
 
-        for term in self.index.term_offsets:
-            postings = self.index.get_postings(term)
-            df = len(postings)
+        for term, df in self.index.iter_postings_counts():
             if df == 0:
                 continue
             self.doc_frequencies[term] = df

@@ -20,6 +20,8 @@ type BenchmarkCase = { cambio: string; objetivo: number; rank: number; resultado
 type BenchmarkResponse = { filas: BenchmarkRow[]; calidad: BenchmarkQuality[]; tamanos: number[] | Record<string, number[]>; k: number; nq: number; parametros: Record<string, string | number>; galeria: Record<string, BenchmarkCase[]> };
 type GinRow = { n: number; consulta_tipo: string; consulta: string; construir_s: number; consulta_ms: number; resultados: number; espacio_bytes: number };
 type GinResponse = { algoritmo: string; tamanos: number[]; filas: GinRow[] };
+type RagSource = { chunk_id: number; title: string; authors: string; year: number | null; pages: string; content: string; score: number };
+type RagResponse = { answer: string; sources: RagSource[]; latency_ms: Record<string, number> };
 type TableInfo = { name: string; file_type: string; key_index: number; columns: Column[]; indexes: { index_name: string; index_type: string; column_name: string }[] };
 type PlanNode = { node: string; table?: string; index?: string; operation?: string; access?: string; column?: string; rows?: number };
 type QueryResult = { message: string; columns: string[]; rows: unknown[][]; plan: PlanNode[]; row_count: number; affected_rows?: number; duration_ms?: number };
@@ -267,6 +269,80 @@ function BenchmarkPanel() {
   );
 }
 
+function RagPanel() {
+  const [question, setQuestion] = useState("¿Qué es la visión computacional?");
+  const [mode, setMode] = useState("hybrid");
+  const [topK, setTopK] = useState("5");
+  const [result, setResult] = useState<RagResponse | null>(null);
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function buildIndexes() {
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API}/api/rag/build`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: true, vector: mode !== "bm25" }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data.detail, "No se pudieron construir los índices RAG"));
+      setMessage(data.vector_cached
+        ? `Índices vectoriales ya estaban listos: ${data.chunks} chunks.`
+        : `Índices listos: ${data.chunks} chunks procesados.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Error al construir los índices RAG");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function ask() {
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API}/api/rag/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, mode, top_k: Number(topK) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data.detail, "No se pudo responder la pregunta"));
+      setResult(data);
+    } catch (error) {
+      setResult(null);
+      setMessage(error instanceof Error ? error.message : "Error del RAG");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className={`${styles.workspace} ${styles.searchWorkspace}`}>
+      <section className={`${styles.panel} ${styles.queryPanel}`}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>11 / RAG ASSISTANT</span><h2 className={styles.panelTitle}>Preguntar a los papers</h2></div><div className={styles.searchBadge}><Zap size={14} /> OLLAMA</div></div>
+        <div className={styles.panelBody}>
+          <label className={styles.eyebrow} htmlFor="rag-question">PREGUNTA</label>
+          <textarea id="rag-question" className={styles.editorInput} value={question} onChange={(event) => setQuestion(event.target.value)} />
+          <div className={styles.queryMeta}>
+            <label>Modo <select value={mode} onChange={(event) => setMode(event.target.value)}><option value="bm25">BM25</option><option value="vector">Vectorial</option><option value="hybrid">Híbrido</option></select></label>
+            <label>Fuentes <select value={topK} onChange={(event) => setTopK(event.target.value)}><option value="3">3</option><option value="5">5</option><option value="10">10</option></select></label>
+          </div>
+          <div className={styles.queryActions}><button className={styles.secondaryButton} onClick={buildIndexes} disabled={loading}><Zap size={14} /> {loading ? "CONSTRUYENDO..." : mode === "bm25" ? "CONSTRUIR BM25" : "CONSTRUIR ÍNDICES"}</button><button className={styles.runButton} onClick={ask} disabled={loading || !question.trim()}><Play size={14} fill="currentColor" /> {loading ? "GENERANDO..." : "PREGUNTAR"}</button></div>
+          {message && <div className={styles.error}><AlertCircle size={15} /><span>{message}</span></div>}
+        </div>
+      </section>
+      <section className={`${styles.panel} ${styles.resultsPanel}`}>
+        <div className={styles.panelHeader}><div><span className={styles.eyebrow}>12 / ANSWER</span><h2 className={styles.panelTitle}>Respuesta</h2></div><div className={styles.searchBadge}>{result ? `${result.latency_ms.total.toFixed(0)} ms` : "WAITING"}</div></div>
+        <div className={styles.panelBody}>
+          {result ? <><div className={styles.planBody}><p className={styles.helpText}>{result.answer}</p><div className={styles.queryMeta}>{Object.entries(result.latency_ms).map(([key, value]) => <span key={key}>{key}: {value.toFixed(0)} ms</span>)}</div></div><div className={styles.resultTableWrap}><table className={styles.resultTable}><thead><tr className={styles.resultRow}><th className={styles.resultHeader}>Chunk</th><th className={styles.resultHeader}>Paper</th><th className={styles.resultHeader}>Páginas</th><th className={styles.resultHeader}>Contenido</th></tr></thead><tbody>{result.sources.map((source) => <tr className={styles.resultRow} key={source.chunk_id}><td className={styles.resultCell}>{source.chunk_id}</td><td className={styles.resultCell}><b>{source.title}</b><br /><small>{source.authors} · {source.year ?? "s/f"}</small></td><td className={styles.resultCell}>{source.pages}</td><td className={styles.resultCell}>{source.content}</td></tr>)}</tbody></table></div></> : <div className={styles.empty}><Search size={25} /><p>Pregunta algo para ver la respuesta y sus fuentes.</p></div>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function Home() {
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -274,7 +350,7 @@ export default function Home() {
   const [result, setResult] = useState<QueryResult>({ message: "Ejecuta una consulta para ver sus resultados.", columns: [], rows: [], plan: [], row_count: 0 });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<"queries" | "transactions" | "text" | "multimedia" | "benchmarks">("queries");
+  const [view, setView] = useState<"queries" | "transactions" | "text" | "multimedia" | "benchmarks" | "rag">("queries");
   const [toast, setToast] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -551,6 +627,7 @@ export default function Home() {
           <button className={view === "queries" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("queries")}><Terminal size={14} /> Consultas</button>
           <button className={view === "text" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("text")}><Search size={14} /> Texto</button>
           <button className={view === "multimedia" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("multimedia")}><FileBox size={14} /> Multimedia</button>
+          <button className={view === "rag" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("rag")}><Zap size={14} /> RAG</button>
           <button className={view === "benchmarks" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("benchmarks")}><Zap size={14} /> Benchmarks</button>
           <button className={view === "transactions" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("transactions")}><LockKeyhole size={14} /> Transacciones</button>
         </nav>
@@ -572,6 +649,8 @@ export default function Home() {
         <TextSearchPanel />
       ) : view === "multimedia" ? (
         <MultimediaSearchPanel />
+      ) : view === "rag" ? (
+        <RagPanel />
       ) : view === "benchmarks" ? (
         <BenchmarkPanel />
       ) : (

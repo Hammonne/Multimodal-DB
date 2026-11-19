@@ -107,6 +107,40 @@ cd web && npm install && cd ..
 ./run_web.sh                      # API en :8000, consola web en :3000
 ```
 
+Para levantar el proveedor LLM local del RAG con Docker:
+
+```bash
+docker compose up -d ollama
+docker compose exec ollama ollama pull qwen2.5:7b-instruct
+```
+
+Ollama queda disponible en `http://localhost:11434`; el backend se conecta
+internamente mediante `http://ollama:11434`. El estado se puede comprobar en
+`GET /api/rag/health`.
+
+Como alternativa a Ollama (lento en CPU), el RAG usa por defecto Google
+Gemini, que tiene tier gratuito. Copia `.env.example` a `.env`, crea una key en
+https://aistudio.google.com y ponla en `RAG_LLM_API_KEY`:
+
+```env
+RAG_LLM_PROVIDER=openai_compatible
+RAG_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+RAG_LLM_MODEL=gemini-flash-lite-latest
+RAG_LLM_API_KEY=tu_api_key
+```
+
+También sirve cualquier otra API compatible con OpenAI (OpenAI, Microsoft
+Foundry, Groq u OpenRouter):
+
+```env
+RAG_LLM_PROVIDER=openai_compatible
+RAG_LLM_BASE_URL=https://api.openai.com/v1
+RAG_LLM_API_KEY=tu_api_key
+RAG_LLM_MODEL=gpt-4o-mini
+```
+
+GitHub Models ya no está disponible; su API fue retirada en 2026.
+
 ```sql
 CREATE TABLE canciones (id INT PRIMARY KEY, titulo VARCHAR(80), artista VARCHAR(60),
                         audio VARCHAR(40), portada VARCHAR(40)) USING HEAP;

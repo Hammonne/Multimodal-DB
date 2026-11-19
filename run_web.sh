@@ -12,6 +12,13 @@ trap cleanup EXIT INT TERM
 
 cd "$ROOT_DIR"
 
+if [[ -f "$ROOT_DIR/scripts/.env" ]]; then
+	set -a
+	# shellcheck disable=SC1091
+	source "$ROOT_DIR/scripts/.env"
+	set +a
+fi
+
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
 	PYTHON_BIN="$ROOT_DIR/.venv/bin/python"

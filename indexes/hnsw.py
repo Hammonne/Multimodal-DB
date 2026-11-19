@@ -148,7 +148,13 @@ class HNSW:
             for l in range(self.nivel[nodo] + 1):
                 planos.extend(self.vecinos[nodo][l])
                 inicios.append(len(planos))
-        np.savez(path, vectores=self.vectores, ids=self.ids, nivel=np.array(self.nivel),
+        # ids son object (numéricos o rutas); se guardan como int64/str para no usar pickle
+        ids = self.ids
+        if ids.dtype == object:
+            ids = (np.asarray(ids.tolist(), dtype=np.int64)
+                   if all(isinstance(i, (int, np.integer)) for i in ids)
+                   else np.asarray([str(i) for i in ids]))
+        np.savez(path, vectores=self.vectores, ids=ids, nivel=np.array(self.nivel),
                  vecinos=np.array(planos, np.int64), inicios=np.array(inicios, np.int64),
                  entrada=-1 if self.entrada is None else self.entrada,
                  params=np.array([self.M, self.ef_construction, int(self.heuristica), self.seed]),
@@ -160,6 +166,8 @@ class HNSW:
         M, efc, heur, seed = (int(x) for x in z["params"])
         h = cls(M, efc, str(z["metrica"]), bool(heur), seed)
         h.vectores, h.ids, h.nivel = z["vectores"], z["ids"], z["nivel"].tolist()
+        if h.ids.dtype.kind == "U":
+            h.ids = h.ids.astype(object)
         planos, inicios = z["vecinos"].tolist(), z["inicios"]
         i = 0
         for nodo in range(len(h.nivel)):

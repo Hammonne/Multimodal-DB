@@ -731,7 +731,7 @@ Reconstruye índices:
 
 ```json
 {
-  "question": "¿Cuáles son las ventajas de HNSW frente a IVF?",
+  "question": "¿Qué es la visión computacional?",
   "mode": "hybrid",
   "top_k": 5
 }

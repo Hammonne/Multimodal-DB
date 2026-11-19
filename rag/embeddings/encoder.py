@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable
 import json
+import os
 
 import numpy as np
 
@@ -15,7 +16,11 @@ class EmbeddingEncoder:
         model_name: str = "intfloat/multilingual-e5-small",
         *,
         device: str | None = None,
+        max_length: int | None = None,
     ) -> None:
+        self.max_length = max_length or int(os.getenv("RAG_EMBEDDING_MAX_LENGTH", "256"))
+        if self.max_length <= 0:
+            raise ValueError("max_length debe ser positivo")
         self.model_name = model_name
         self.device = device
         self._tokenizer: Any | None = None
@@ -64,6 +69,7 @@ class EmbeddingEncoder:
                     values[start : start + batch_size],
                     padding=True,
                     truncation=True,
+                    max_length=self.max_length,
                     return_tensors="pt",
                 )
                 encoded = {key: value.to(device) for key, value in encoded.items()}

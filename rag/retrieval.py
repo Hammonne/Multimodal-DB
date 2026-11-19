@@ -25,10 +25,10 @@ class HybridRetriever:
 
     def __init__(
         self,
-        bm25: BM25,
-        hnsw: HNSW,
+        bm25: BM25 | None,
+        hnsw: HNSW | None,
         chunks: Iterable[dict[str, Any]],
-        query_encoder: Callable[[Iterable[str]], np.ndarray],
+        query_encoder: Callable[[Iterable[str]], np.ndarray] | None,
         *,
         rrf_k: int = 60,
     ) -> None:
@@ -61,6 +61,8 @@ class HybridRetriever:
         eligible = self._eligible(year=year, author=author, language=language)
         rankings: list[list[int]] = []
         if mode in {"bm25", "hybrid"}:
+            if self.bm25 is None:
+                raise RuntimeError("el índice textual no está disponible")
             rankings.append(
                 [
                     int(chunk_id)
@@ -69,6 +71,8 @@ class HybridRetriever:
                 ]
             )
         if mode in {"vector", "hybrid"}:
+            if self.hnsw is None or self.query_encoder is None:
+                raise RuntimeError("el índice vectorial no está disponible")
             query_vector = np.asarray(self.query_encoder([query]), dtype=np.float32)
             ids, _ = self.hnsw.buscar(query_vector[0], candidate_k, ef_search=50)
             rankings.append([int(chunk_id) for chunk_id in ids if int(chunk_id) in eligible])

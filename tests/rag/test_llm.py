@@ -19,3 +19,4 @@ def test_ollama_config_reads_model_and_url(monkeypatch):
 
     assert config.base_url == "http://ollama:11434"
     assert config.model == "qwen2.5:7b-instruct"
+    assert config.max_tokens == 512
