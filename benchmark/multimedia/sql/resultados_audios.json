@@ -1,0 +1,67 @@
+{
+ "carpeta": "/private/tmp/claude-503/-Users-luciagurbillon-Documents-github-things-Multimodal-DB/b5db5943-b8b4-4eb0-8523-e371c0dff80b/scratchpad/bench_carpetas/audios",
+ "tipo": "AUDIO",
+ "k": 10,
+ "filas": [
+  {
+   "n": 50,
+   "importar_s": 0.0037555419839918613,
+   "lineal_modelo_s": 4.162468834023457,
+   "lineal_ms": 1.2970229494385421,
+   "ivf_construir_s": 0.9804281659889966,
+   "ivf_ms": 1.1628916981862858,
+   "ivf_recall": 1.0,
+   "ivf_kb": 145.48828125,
+   "k_codebook": 254,
+   "hnsw_construir_s": 0.9972000840352848,
+   "hnsw_ms": 0.9506541508017108,
+   "hnsw_recall": 1.0,
+   "hnsw_kb": 106.33984375
+  },
+  {
+   "n": 100,
+   "importar_s": 0.014042707975022495,
+   "lineal_modelo_s": 6.226182124984916,
+   "lineal_ms": 2.3083104024408385,
+   "ivf_construir_s": 1.5346202089567669,
+   "ivf_ms": 1.783018751302734,
+   "ivf_recall": 1.0,
+   "ivf_kb": 344.70703125,
+   "k_codebook": 359,
+   "hnsw_construir_s": 1.798596832959447,
+   "hnsw_ms": 1.583791701705195,
+   "hnsw_recall": 1.0,
+   "hnsw_kb": 226.09765625
+  },
+  {
+   "n": 200,
+   "importar_s": 0.05847370799165219,
+   "lineal_modelo_s": 13.356209374964237,
+   "lineal_ms": 4.154127099900506,
+   "ivf_construir_s": 2.7895637080073357,
+   "ivf_ms": 2.2532895993208513,
+   "ivf_recall": 0.91,
+   "ivf_kb": 685.17578125,
+   "k_codebook": 508,
+   "hnsw_construir_s": 3.3639815420028754,
+   "hnsw_ms": 2.47467499866616,
+   "hnsw_recall": 1.0,
+   "hnsw_kb": 531.62109375
+  },
+  {
+   "n": 300,
+   "importar_s": 0.1292538749985397,
+   "lineal_modelo_s": 18.527035040955525,
+   "lineal_ms": 8.228616652195342,
+   "ivf_construir_s": 3.3292208749917336,
+   "ivf_ms": 2.8847500012489036,
+   "ivf_recall": 0.915,
+   "ivf_kb": 1081.89453125,
+   "k_codebook": 622,
+   "hnsw_construir_s": 4.623950125009287,
+   "hnsw_ms": 2.2516437486046925,
+   "hnsw_recall": 1.0,
+   "hnsw_kb": 906.59765625
+  }
+ ]
+}

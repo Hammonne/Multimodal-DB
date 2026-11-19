@@ -16,6 +16,8 @@ import sys
 import os
 import csv
 import json
+import copy
+import heapq
 import math
 import time
 from contextlib import contextmanager
@@ -54,16 +56,25 @@ from indexes.bitmap_index import BitmapIndex
 from storage.index_manager import RTreeSecondaryIndex
 from storage.vector_index import (VectorSecondaryIndex, Vectorizador, limpiar,
                                   ruta_archivo, score as score_similitud)
+from multimedia import features as F
 from multimedia.features import tipo_de
 from storage.formats.serializers.variable_length_serializer import VariableLengthRecordSerializer
 from storage.lock_manager import LockMode
+from storage.formats.data_types import MEDIA_DATA_TYPES
+from storage.modelo_multimedia import ModeloMultimedia
 from storage.rid import RID
-from text_based.spimi import SPIMIIndex
+from text_based.spimi import SPIMIIndex, tokenize
 from text_based.bm25 import BM25
 from text_based.tfidf import TFIDFCosine
 
 EXTERNAL_SORT_BUDGET = 1000
 EXTERNAL_HASH_BUCKETS = 16
+# SIMILAR_TO con un filtro: si quedan pocas filas se comparan todas (pre-filtro exacto, como el
+# full_scan_threshold de qdrant o el flatSearchCutoff de weaviate); si quedan muchas se busca en el
+# índice saltando las que no cumplen (búsqueda filtrada)
+UMBRAL_PREFILTRO = 2000
+NPROBE_DEFECTO = 10          # ivf: celdas que se abren (WITH NPROBE=)
+EF_SEARCH_DEFECTO = 50       # hnsw: tamaño de la lista de candidatos (WITH EF_SEARCH=)
 TEXT_INDEX_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "text_indexes"))
 
 
@@ -111,10 +122,20 @@ class SqlTextIndex:
 
     def search(self, query, algorithm, top_k):
         algorithm = algorithm.casefold()
-        if algorithm not in {"bm25", "tfidf"}:
+        if algorithm not in {"bm25", "tfidf", "spimi"}:
             raise ExecutionError(
                 f"algoritmo textual no soportado: {algorithm}; "
-                "use BM25 o TF_IDF"
+                "use SPIMI, BM25 o TF_IDF"
+            )
+        if algorithm == "spimi":
+            # SPIMI puro: sin TF-IDF ni BM25, el score es la suma de las
+            # frecuencias de los terminos de la consulta en cada documento.
+            scores = {}
+            for term in set(tokenize(query)):
+                for doc_id, frequency in self.index.get_postings(term):
+                    scores[doc_id] = scores.get(doc_id, 0.0) + frequency
+            return heapq.nlargest(
+                top_k, scores.items(), key=lambda item: item[1]
             )
         ranker = BM25(self.index) if algorithm == "bm25" else TFIDFCosine(self.index)
         return ranker.search(query, top_k)
@@ -129,6 +150,8 @@ TIPOS = {
     DataType.BOOL_TYPE: "boolean",
     DataType.DATE_TYPE: "date",
     DataType.POINT_TYPE: "point",
+    DataType.IMAGE_TYPE: "image",
+    DataType.AUDIO_TYPE: "audio",
 }
 
 def tipo_a_str(columna) -> str:
@@ -218,6 +241,7 @@ class ExecuteVisitor(Visitor):
         self.transaction_id = None
         self.session_id = self.sm.allocate_session_id()
         self._text_indexes = {}
+        self._text_versions = {}
 
     def ejecutar(self, programa) -> list:
         salidas = []
@@ -295,8 +319,11 @@ class ExecuteVisitor(Visitor):
     def visit_import_csv_stmt(self, stm):
         """Carga un CSV generado por los scripts en una tabla ya creada."""
         archivo = os.path.abspath(stm.archivo)
+        if os.path.isdir(archivo):
+            return self._importar_carpeta(stm, archivo)
         if not os.path.isfile(archivo):
             raise ExecutionError(f"no existe el archivo CSV: {archivo}")
+        self._carpeta_csv = os.path.dirname(archivo)
         with self._table_locks([stm.tabla], LockMode.EXCLUSIVE):
             tabla = self._abrir(stm.tabla)
             with open(archivo, newline="", encoding="utf-8-sig") as handle:
@@ -332,10 +359,62 @@ class ExecuteVisitor(Visitor):
             f"{inserted} fila(s) importada(s) desde '{stm.archivo}'"
         )
 
+    def _importar_carpeta(self, stm, carpeta):
+        # IMPORT INTO tabla FROM 'carpeta/': una fila por imagen o audio de la carpeta (dataset propio).
+        # La tabla necesita una columna IMAGE o AUDIO; si tiene una INT de clave se numera 1, 2, 3...
+        # y la primera VARCHAR recibe el nombre del archivo
+        with self._table_locks([stm.tabla], LockMode.EXCLUSIVE):
+            tabla = self._abrir(stm.tabla)
+            esquema = [t.strip().lower() for t in tabla.schema]
+            media = [i for i, t in enumerate(esquema) if t in MEDIA_DATA_TYPES]
+            if not media:
+                raise ExecutionError(f"'{stm.tabla}' no tiene una columna IMAGE o AUDIO para cargar la carpeta")
+            pos = media[0]
+            extensiones = F.IMAGEN if esquema[pos] == "image" else F.AUDIO
+            archivos = sorted(f for f in os.listdir(carpeta)
+                              if os.path.splitext(f)[1].lower() in extensiones)
+            if not archivos:
+                raise ExecutionError(f"la carpeta no tiene archivos de tipo {esquema[pos].upper()}")
+            texto = next((i for i, t in enumerate(esquema) if t.startswith("varchar") and i != pos), None)
+            insertadas = 0
+            for n, nombre in enumerate(archivos, start=1):
+                fila = []
+                for i, t in enumerate(esquema):
+                    if i == pos:
+                        fila.append(self._ruta_media(os.path.join(carpeta, nombre)))
+                    elif i == texto:
+                        fila.append(os.path.splitext(nombre)[0])
+                    elif t in ("integer", "int"):
+                        fila.append(n)
+                    elif t == "float":
+                        fila.append(float(n))
+                    elif t in ("boolean", "bool"):
+                        fila.append(False)
+                    else:
+                        fila.append("")
+                tabla.insert(fila, mutation_logger=self._mutation_logger())
+                insertadas += 1
+        self.resultado = Resultado(f"{insertadas} archivo(s) importado(s) desde la carpeta '{stm.archivo}'")
+
     @staticmethod
-    def _csv_value(value, schema):
+    def _ruta_media(ruta):
+        # se guarda relativa a data/ si está dentro (más corta y portable); si no, absoluta
+        ruta = os.path.abspath(ruta)
+        data = os.path.abspath(F.DATA)
+        return os.path.relpath(ruta, data) if ruta.startswith(data + os.sep) else ruta
+
+    def _csv_value(self, value, schema):
         value = "" if value is None else value.strip()
         normalized = schema.lower()
+        if normalized in MEDIA_DATA_TYPES:
+            # la ruta del archivo: tal cual si existe, si no relativa al csv o a data/
+            if not value:
+                return ""
+            carpeta_csv = getattr(self, "_carpeta_csv", "")
+            for candidata in (value, os.path.join(carpeta_csv, value), os.path.join(F.DATA, value)):
+                if os.path.exists(candidata):
+                    return self._ruta_media(candidata)
+            raise ValueError(f"no existe el archivo '{value}' (se buscó junto al csv y en data/)")
         if normalized == "integer":
             return int(value)
         if normalized == "float":
@@ -460,36 +539,101 @@ class ExecuteVisitor(Visitor):
                 return matches[0]
         return None
 
+    @staticmethod
+    def _condicion_sin_match(condicion):
+        """Deja solo las condiciones que no son MATCH, para aplicarlas como filtro."""
+        if isinstance(condicion, MatchExpr):
+            return None
+        if isinstance(condicion, AndCond):
+            resto = [
+                parte for parte in (
+                    ExecuteVisitor._condicion_sin_match(c)
+                    for c in condicion.condiciones
+                )
+                if parte is not None
+            ]
+            if not resto:
+                return None
+            if len(resto) == 1:
+                return resto[0]
+            combinada = AndCond()
+            combinada.condiciones = resto
+            return combinada
+        return condicion
+
     def _select_textual(self, tabla, stm, match):
         columna = match.columna.columna
-        indice = self._text_indexes.get((tabla.name, columna))
+        posicion = tabla.column_index(columna)
+        clave = (tabla.name, columna)
+        version = getattr(tabla, "version", 0)
+
+        indice = self._text_indexes.get(clave)
+        if indice is not None and self._text_versions.get(clave) != version:
+            indice = None  # el snapshot quedo viejo: se reconstruye
+
         if indice is None:
-            for meta in self.sm.catalog.get_table_indexes(tabla.name):
-                if (meta["column_name"] == columna
-                        and meta["index_type"].lower() == "spimi"):
-                    base = os.path.join(TEXT_INDEX_ROOT, meta["index_name"])
-                    try:
-                        indice = SqlTextIndex(base, tabla,
-                                              meta["column_index"]).load()
-                    except (OSError, ValueError) as exc:
-                        raise ExecutionError(
-                            f"no se pudo cargar el indice SPIMI '{meta['index_name']}': {exc}"
-                        ) from exc
-                    self._text_indexes[(tabla.name, columna)] = indice
-                    break
-        if indice is None:
-            raise ExecutionError(
-                f"no existe un indice SPIMI sobre {tabla.name}({columna}); "
-                f"cree uno con CREATE INDEX ON {tabla.name} ({columna}) USING SPIMI"
-            )
-        resultados = indice.search(match.consulta, match.algoritmo,
-                                   stm.limite if stm.haylimite else 10)
+            base = None
+            if clave in self._text_indexes:
+                base = self._text_indexes[clave].path
+            else:
+                for meta in self.sm.catalog.get_table_indexes(tabla.name):
+                    if (meta["column_name"] == columna
+                            and meta["index_type"].lower()
+                            in ("spimi", "tfidf", "bm25")):
+                        base = os.path.join(TEXT_INDEX_ROOT, meta["index_name"])
+                        try:
+                            indice = SqlTextIndex(
+                                base, tabla, meta["column_index"]
+                            ).load()
+                        except (OSError, ValueError) as exc:
+                            raise ExecutionError(
+                                f"no se pudo cargar el indice SPIMI "
+                                f"'{meta['index_name']}': {exc}"
+                            ) from exc
+                        break
+
+            if indice is None:
+                # Sin indice registrado, MATCH construye uno automatico sobre
+                # la tabla actual. Asi las consultas funcionan sin exigir un
+                # CREATE INDEX previo.
+                if base is None:
+                    base = os.path.join(
+                        TEXT_INDEX_ROOT, f"auto_{tabla.name}_{columna}"
+                    )
+                try:
+                    indice = SqlTextIndex(base, tabla, posicion)
+                    indice.build(tabla)
+                except (OSError, ValueError) as exc:
+                    raise ExecutionError(
+                        f"no se pudo construir el indice de texto: {exc}"
+                    ) from exc
+
+            self._text_indexes[clave] = indice
+            self._text_versions[clave] = version
+
+        resto = self._condicion_sin_match(stm.condicion)
+        total = max(1, indice.index.doc_count)
+        limite_busqueda = total if resto is not None else (
+            stm.limite if stm.haylimite else 10
+        )
+        resultados = indice.search(
+            match.consulta, match.algoritmo, limite_busqueda
+        )
         por_id = {doc_id: score for doc_id, score in resultados}
+
+        resolver = self._resolver_columnas([(tabla.name, tabla)])
         filas = []
         for doc_id, (_, values) in enumerate(tabla.scan()):
-            if doc_id in por_id:
-                filas.append((values, por_id[doc_id]))
+            if doc_id not in por_id:
+                continue
+            if resto is not None and not self._evaluar(
+                resto, values, resolver
+            ):
+                continue
+            filas.append((values, por_id[doc_id]))
         filas.sort(key=lambda item: item[1], reverse=True)
+        if stm.haylimite:
+            filas = filas[:stm.limite]
 
         self.plan = [{
             "node": "TEXT INDEX SCAN",
@@ -509,7 +653,6 @@ class ExecuteVisitor(Visitor):
                 nombres.append(score_items[0].alias or "score")
             salida = [list(values) for values, _ in filas]
         else:
-            resolver = self._resolver_columnas([(tabla.name, tabla)])
             salida = []
             for item in stm.proyeccion:
                 nombres.append(self._nombre_item(item))
@@ -521,7 +664,10 @@ class ExecuteVisitor(Visitor):
                     else:
                         row.append(values[resolver(item.columna)])
                 salida.append(row)
-        if stm.select_all and any(isinstance(item.columna, SimilarityScoreExpr) for item in stm.proyeccion):
+        if stm.select_all and any(
+            isinstance(item.columna, SimilarityScoreExpr)
+            for item in stm.proyeccion
+        ):
             salida = [row + [score] for row, (_, score) in zip(salida, filas)]
         self.plan.append({"node": "OUTPUT", "operation": "return_rows", "rows": len(salida)})
         self.resultado = Resultado(columnas=nombres, filas=salida, plan=self.plan)
@@ -556,7 +702,7 @@ class ExecuteVisitor(Visitor):
         vectoriales = [(pos, idx) for pos, idxs in tabla.secondary_indexes.items()
                        for idx in idxs
                        if isinstance(idx, VectorSecondaryIndex) and idx.tipo == tipo]
-        if pedido != VectorIndex.NINGUNO:
+        if pedido in (VectorIndex.IVF, VectorIndex.HNSW):
             for pos, idx in vectoriales:
                 if idx.tipo_indice == pedido.name.lower():
                     return pos, idx
@@ -566,9 +712,18 @@ class ExecuteVisitor(Visitor):
                 f"USING {pedido.name}"
             )
         if vectoriales:
-            return vectoriales[0][0], None
+            # sin USING: el índice de la tabla, primero HNSW (mejor recall) y si no IVF.
+            # USING SEQ también devuelve el índice, pero se recorren todos sus vectores (la respuesta
+            # exacta con el mismo modelo que usa el índice); ver _candidatos_similares
+            vectoriales.sort(key=lambda par: par[1].tipo_indice != "hnsw")
+            return vectoriales[0]
 
-        # sin indice: la primera columna varchar cuyos archivos son del mismo tipo
+        # sin indice: primero una columna IMAGE o AUDIO del mismo tipo que el archivo de consulta
+        for pos, t in enumerate(tabla.schema):
+            if MEDIA_DATA_TYPES.get(t.strip().lower()) == tipo:
+                return pos, None
+
+        # si no, la primera columna varchar cuyos archivos son del mismo tipo
         for _, registro in tabla.scan():
             for pos, t in enumerate(tabla.schema):
                 if not t.strip().lower().startswith("varchar"):
@@ -581,9 +736,37 @@ class ExecuteVisitor(Visitor):
             break
         raise ExecutionError(f"'{tabla.name}' no tiene una columna con rutas de {nombre_tipo}")
 
-    def _vector_consulta(self, similar):
+    def _es_media(self, tabla, pos):
+        return tabla.schema[pos].strip().lower() in MEDIA_DATA_TYPES
+
+    def _modelo_columna(self, tabla, pos):
+        # búsqueda lineal sobre una columna IMAGE / AUDIO sin índice: se entrena un modelo con sus archivos
+        # y se guarda en memoria mientras la tabla no cambie (mismas filas)
+        filas = [(rid, registro) for rid, registro in tabla.scan() if limpiar(registro[pos])]
+        clave = (tabla.name, pos, len(filas), tuple(rid for rid, _ in filas[:3]))
+        cache = getattr(self, "_modelos", {})
+        if clave not in cache:
+            rutas = [ruta_archivo(registro[pos]) for _, registro in filas]
+            faltan = [r for r in rutas if not os.path.exists(r)]
+            if faltan:
+                raise ExecutionError(f"no existe el archivo '{faltan[0]}'")
+            if not rutas:
+                raise ExecutionError(f"la columna '{tabla.column_names[pos]}' no tiene archivos")
+            modelo = ModeloMultimedia(MEDIA_DATA_TYPES[tabla.schema[pos].strip().lower()]).entrenar(rutas)
+            cache = {k: v for k, v in cache.items() if k[:2] != clave[:2]}
+            cache[clave] = (modelo, [(registro, v) for (_, registro), v in
+                                     zip(filas, modelo.vectores_entrenamiento())])
+            self._modelos = cache
+        return cache[clave]
+
+    def _vector_consulta(self, similar, tabla=None, pos=None, indice=None):
         try:
-            return self._vectorizador().vector(ruta_archivo(similar.archivo))
+            ruta = ruta_archivo(similar.archivo)
+            if indice is not None and indice.modelo is not None:
+                return indice.vector_consulta(ruta)
+            if tabla is not None and pos is not None and self._es_media(tabla, pos):
+                return self._modelo_columna(tabla, pos)[0].vector(ruta)
+            return self._vectorizador().vector(ruta)
         except FileNotFoundError:
             raise ExecutionError(f"no existe el archivo de consulta '{similar.archivo}'")
         except ValueError as e:
@@ -594,32 +777,63 @@ class ExecuteVisitor(Visitor):
         k, metrica = similar.k, stm.metrica_vectorial
         filtro = stm.condicion if stm.condicion is not similar else None
 
+        if indice is not None and stm.indice_vectorial == VectorIndex.LINEAL:
+            # USING SEQ con índice: se comparan todos los vectores del índice (respuesta exacta)
+            entrada = {"node": "VECTOR SEQ SCAN", "table": tabla.name, "operation": "vector_scan",
+                       "column": tabla.column_names[pos], "k": k, "metric": metrica}
+            self.plan.append(entrada)
+            todos = []
+            with self._medir(entrada) as medida:
+                for rid, v in indice.todos():
+                    registro = tabla.get(rid)
+                    if registro is None:
+                        continue
+                    if filtro is not None and not self._evaluar(filtro, registro, resolver):
+                        medida.descartada()
+                        continue
+                    medida.emitida()
+                    todos.append((registro, score_similitud(metrica, q, v)))
+            entrada["candidates"] = len(todos)
+            todos.sort(key=lambda par: -par[1])
+            return todos[:k]
+
         if indice is not None:
+            nprobe = getattr(stm, "nprobe", None) or NPROBE_DEFECTO
+            ef = getattr(stm, "ef_search", None) or EF_SEARCH_DEFECTO
             entrada = {"node": "VECTOR INDEX SCAN", "table": tabla.name,
                        "operation": "vector_index_scan", "index": indice.tipo_indice,
                        "column": tabla.column_names[pos], "k": k, "metric": metrica}
+            if indice.tipo_indice == "ivf":
+                entrada["nprobe"] = nprobe
+            else:
+                entrada["ef_search"] = ef
             self.plan.append(entrada)
-            salida, vistos, pedidos = [], set(), k
+            salida = []
             with self._medir(entrada) as medida:
-                while len(salida) < k:
-                    vecinos = indice.knn(q, pedidos)
-                    for rid, v in vecinos:
-                        if rid in vistos:
-                            continue
-                        vistos.add(rid)
+                if filtro is None:
+                    for rid, v in indice.knn(q, k, nprobe, ef):
                         registro = tabla.get(rid)
-                        if registro is None:
-                            continue
-                        if filtro is None or self._evaluar(filtro, registro, resolver):
+                        if registro is not None:
                             medida.emitida()
                             salida.append((registro, score_similitud(metrica, q, v)))
-                            if len(salida) == k:
-                                break
+                else:
+                    # primero el filtro relacional (qué filas cumplen el resto del WHERE) y después
+                    # la búsqueda solo entre esas: así siempre salen k filas si existen
+                    registros = {}
+                    for rid, registro in tabla.scan():
+                        if self._evaluar(filtro, registro, resolver):
+                            registros[rid] = registro
                         else:
                             medida.descartada()
-                    if len(vecinos) < pedidos:
-                        break
-                    pedidos *= 2
+                    if len(registros) <= UMBRAL_PREFILTRO:
+                        entrada["strategy"] = f"pre-filtro exacto ({len(registros)} filas cumplen)"
+                        vecinos = indice.exacto(q, k, registros)
+                    else:
+                        entrada["strategy"] = f"filtro dentro del indice ({len(registros)} filas cumplen)"
+                        vecinos = indice.knn(q, k, nprobe, ef, rids_permitidos=registros)
+                    for rid, v in vecinos:
+                        medida.emitida()
+                        salida.append((registros[rid], score_similitud(metrica, q, v)))
             entrada["candidates"] = indice.candidatos
             return salida
 
@@ -629,6 +843,17 @@ class ExecuteVisitor(Visitor):
         self.plan.append(entrada)
         vec = self._vectorizador()
         todos = []
+        if self._es_media(tabla, pos):
+            with self._medir(entrada) as medida:
+                for registro, v in self._modelo_columna(tabla, pos)[1]:
+                    if filtro is not None and not self._evaluar(filtro, registro, resolver):
+                        medida.descartada()
+                        continue
+                    medida.emitida()
+                    todos.append((registro, score_similitud(metrica, q, v)))
+            entrada["candidates"] = len(todos)
+            todos.sort(key=lambda par: -par[1])
+            return todos[:k]
         with self._medir(entrada) as medida:
             for _, registro in tabla.scan():
                 if filtro is not None and not self._evaluar(filtro, registro, resolver):
@@ -647,18 +872,140 @@ class ExecuteVisitor(Visitor):
         return todos[:k]
 
     def _select_similitud(self, tabla, stm, similar):
-        if stm.join is not None:
-            raise ExecutionError("SIMILAR_TO no se puede combinar con JOIN")
-        if self._tiene_agregados(stm):
-            raise ExecutionError("SIMILAR_TO no se puede combinar con agregaciones")
-
         self.plan = [{"node": "SELECT", "table": stm.tabla, "operation": "project"}]
-        resolver = self._resolver_columnas([(stm.tabla, tabla)])
+        if stm.join is not None:
+            self._select_similitud_join(tabla, stm, similar)
+            return
+
+        tablas = [(stm.tabla, tabla)]
+        resolver = self._resolver_columnas(tablas)
         t_plan = time.perf_counter()
         pos, indice = self._plan_similitud(tabla, stm, similar)
         self._planning_ms += (time.perf_counter() - t_plan) * 1000.0
-        q = self._vector_consulta(similar)
+        q = self._vector_consulta(similar, tabla, pos, indice)
         pares = self._candidatos_similares(tabla, stm, similar, pos, indice, q, resolver)
+        self._salida_similitud(stm, pares, tablas, resolver, tabla.data_file.serializer)
+
+    def _lado_similitud(self, tablas, stm, similar):
+        # con JOIN: la tabla que tiene la columna de imágenes o audios (primero la del FROM)
+        primer_error = None
+        for lado, (_, t) in enumerate(tablas):
+            try:
+                pos, indice = self._plan_similitud(t, stm, similar)
+                return lado, pos, indice
+            except ExecutionError as e:
+                primer_error = primer_error or e
+        raise primer_error
+
+    @staticmethod
+    def _columnas_de(cond):
+        # todas las ColRef de una condición (para saber a qué tabla se refiere)
+        # solo se recorren nodos del AST (clases de ast_sql) y listas, marcando lo visitado
+        vistas, pila, visitados = [], [cond], set()
+        while pila:
+            x = pila.pop()
+            if id(x) in visitados:
+                continue
+            visitados.add(id(x))
+            if isinstance(x, ColRef):
+                vistas.append(x)
+            elif isinstance(x, (list, tuple)):
+                pila.extend(x)
+            elif type(x).__module__ == ColRef.__module__ and hasattr(x, "__dict__"):
+                pila.extend(vars(x).values())
+        return vistas
+
+    def _select_similitud_join(self, izquierda, stm, similar):
+        # SIMILAR_TO + JOIN: los k pares (fila parecida, fila unida) más parecidos que cumplen el WHERE.
+        # Las condiciones que solo miran la tabla con la imagen o el audio se aplican antes de buscar
+        # (como un filtro normal de SIMILAR_TO); las que miran la otra tabla, después de unir. Si después
+        # de unir faltan filas se piden el doble de vecinos, hasta completar k
+        derecha = self._abrir(stm.join.tabla)
+        tablas = [(stm.tabla, izquierda), (stm.join.tabla, derecha)]
+        resolver = self._resolver_columnas(tablas)
+        t_plan = time.perf_counter()
+        lado, pos, indice = self._lado_similitud(tablas, stm, similar)
+        self._planning_ms += (time.perf_counter() - t_plan) * 1000.0
+        nombre_v, tabla_v = tablas[lado]
+        nombre_o, tabla_o = tablas[1 - lado]
+        ancho_izq = len(izquierda.schema)
+        rango_v = range(0, ancho_izq) if lado == 0 else range(ancho_izq, ancho_izq + len(derecha.schema))
+
+        # columnas del ON de cada lado
+        col_izq, col_der = stm.join.izquierda, stm.join.derecha
+        for col, t in ((col_izq, izquierda), (col_der, derecha)):
+            if col.tabla and col.tabla != t.name:
+                raise ExecutionError(f"el ON debe comparar {izquierda.name}.columna = {derecha.name}.columna")
+        pos_on = (izquierda.column_index(col_izq.columna), derecha.column_index(col_der.columna))
+
+        # condiciones que se pueden aplicar antes de unir (solo columnas de la tabla con la imagen/audio)
+        conjuntos = (stm.condicion.condiciones if isinstance(stm.condicion, AndCond) else [stm.condicion])
+        locales = [c for c in conjuntos if c is not similar and c is not None and
+                   all(resolver(col) in rango_v for col in self._columnas_de(c))]
+        resolver_v = self._resolver_columnas([(nombre_v, tabla_v)])
+
+        # hash de la otra tabla por la columna del ON
+        self.plan.append({"node": "HASH JOIN", "table": nombre_o, "operation": "join"})
+        hash_o = {}
+        for _, registro in tabla_o.scan():
+            hash_o.setdefault(registro[pos_on[1 - lado]], []).append(registro)
+
+        q = self._vector_consulta(similar, tabla_v, pos, indice)
+        k = similar.k
+        pedidos, salida, vistos = k, [], 0
+        inicio_plan = len(self.plan)
+        while True:
+            del self.plan[inicio_plan:]           # en el plan queda solo la última búsqueda
+            sim = copy.copy(similar)
+            sim.k = pedidos
+            sub = copy.copy(stm)
+            sub.join = None
+            if locales:
+                sub.condicion = AndCond()
+                sub.condicion.condiciones = locales + [sim]
+            else:
+                sub.condicion = sim
+            pares_v = self._candidatos_similares(tabla_v, sub, sim, pos, indice, q, resolver_v)
+            pares_v.sort(key=lambda par: -par[1])
+            for registro_v, sc in pares_v[vistos:]:
+                for registro_o in hash_o.get(registro_v[pos_on[lado]], ()):
+                    combinado = (list(registro_v) + list(registro_o) if lado == 0
+                                 else list(registro_o) + list(registro_v))
+                    if stm.condicion is None or self._evaluar(stm.condicion, combinado, resolver):
+                        salida.append((combinado, sc))
+                        if len(salida) == k:
+                            break
+                if len(salida) == k:
+                    break
+            vistos = len(pares_v)
+            if len(salida) >= k or len(pares_v) < pedidos:
+                break
+            pedidos *= 2
+        self.plan[inicio_plan]["k"] = k
+        serializador = VariableLengthRecordSerializer(list(izquierda.schema) + list(derecha.schema))
+        self._salida_similitud(stm, salida[:k], tablas, resolver, serializador)
+
+    def _salida_similitud(self, stm, pares, tablas, resolver, serializador):
+        # [(registro, score)] -> resultado: GROUP BY / agregaciones, o ORDER BY + LIMIT + proyección
+        if self._tiene_agregados(stm) or stm.group_by is not None:
+            if any(isinstance(i.columna, SimilarityScoreExpr) for i in stm.proyeccion) \
+                    or isinstance(stm.order_by, SimilarityScoreExpr):
+                raise ExecutionError("SIMILARITY_SCORE() no se puede usar con GROUP BY ni agregaciones")
+            tabla = tablas[0][1]
+            columnas_agregacion = [tabla.column_names[tabla.key_index] if i.agg == AggFun.COUNT_AGG
+                                   else i.columna.columna
+                                   for i in stm.proyeccion if i.agg != AggFun.NONE_AGG]
+            self.plan.append({"node": "HASH AGGREGATE", "operation": "aggregate",
+                              "column": columnas_agregacion})
+            nombres, filas = self._proyeccion_agregada(stm, [r for r, _ in pares], resolver, serializador)
+            if stm.order_by is not None:
+                filas = self._ordenar_resultado(filas, nombres, self._etiqueta_orden(stm.order_by),
+                                                stm.direccion == SortDir.DESC_DIR)
+            if stm.haylimite:
+                filas = filas[:stm.limite]
+            self.plan.append({"node": "OUTPUT", "operation": "return_rows", "rows": len(filas)})
+            self.resultado = Resultado(columnas=nombres, filas=filas, plan=self.plan)
+            return
 
         # ORDER BY: el score (o su alias) o cualquier otra columna; sin ORDER BY el mas parecido primero
         if stm.order_by is not None:
@@ -676,7 +1023,7 @@ class ExecuteVisitor(Visitor):
             pares = pares[:stm.limite]
 
         if stm.select_all:
-            nombres = list(tabla.column_names)
+            nombres = [col for _, t in tablas for col in t.column_names]
             filas = [list(registro) for registro, _ in pares]
         else:
             nombres = [self._nombre_item(i) for i in stm.proyeccion]
@@ -732,19 +1079,35 @@ class ExecuteVisitor(Visitor):
         tabla = self._abrir(stm.tabla)
         pos = tabla.column_index(stm.columna)
 
-        if stm.tipo == IndexKind.SPIMI_IDX:
+        tipos_texto = {
+            IndexKind.SPIMI_IDX: "spimi",
+            IndexKind.TFIDF_IDX: "tfidf",
+            IndexKind.BM25_IDX: "bm25",
+        }
+        if stm.tipo in tipos_texto:
             if tabla.file_type != "heap":
-                raise ExecutionError("un indice SPIMI exige una tabla USING HEAP")
-            nombre = f"idx_{stm.tabla}_{stm.columna}_spimi"
+                raise ExecutionError(
+                    "un indice de texto exige una tabla USING HEAP"
+                )
+            kind = tipos_texto[stm.tipo]
+            etiqueta = {
+                "spimi": "SPIMI", "tfidf": "TF_IDF", "bm25": "BM25"
+            }[kind]
+            nombre = f"idx_{stm.tabla}_{stm.columna}_{kind}"
             base = os.path.join(TEXT_INDEX_ROOT, nombre)
             indice = SqlTextIndex(base, tabla, pos)
             try:
                 indice.build(tabla)
             except (OSError, ValueError) as exc:
-                raise ExecutionError(f"no se pudo construir el indice SPIMI: {exc}") from exc
+                raise ExecutionError(
+                    f"no se pudo construir el indice {etiqueta}: {exc}"
+                ) from exc
             self._text_indexes[(stm.tabla, stm.columna)] = indice
+            self._text_versions[(stm.tabla, stm.columna)] = getattr(
+                tabla, "version", 0
+            )
             self.sm.catalog.register_index(
-                nombre, stm.tabla, stm.columna, pos, "spimi"
+                nombre, stm.tabla, stm.columna, pos, kind
             )
             self._log_ddl(
                 "create_index", stm.tabla,
@@ -753,7 +1116,8 @@ class ExecuteVisitor(Visitor):
                  "clustered": False},
             )
             self.resultado = Resultado(
-                f"Indice SPIMI '{nombre}' creado sobre {stm.tabla}({stm.columna})"
+                f"Indice {etiqueta} '{nombre}' creado sobre "
+                f"{stm.tabla}({stm.columna})"
             )
             return
 
@@ -794,10 +1158,11 @@ class ExecuteVisitor(Visitor):
                 raise ExecutionError(
                     f"un indice {stm.tipo.name[:-4]} exige una tabla USING HEAP"
                 )
-            if not tabla.schema[pos].strip().lower().startswith("varchar"):
+            tipo_col = tabla.schema[pos].strip().lower()
+            if not (tipo_col.startswith("varchar") or tipo_col in ("image", "audio")):
                 raise ExecutionError(
-                    f"un indice {stm.tipo.name[:-4]} va sobre una columna VARCHAR con "
-                    f"la ruta de la imagen o el audio; '{stm.columna}' es de tipo "
+                    f"un indice {stm.tipo.name[:-4]} va sobre una columna IMAGE o AUDIO (o un "
+                    f"VARCHAR con la ruta del archivo); '{stm.columna}' es de tipo "
                     f"'{tabla.schema[pos]}'"
                 )
         elif stm.clustered:
@@ -985,15 +1350,43 @@ class ExecuteVisitor(Visitor):
 
         similar = self._similar_de(condicion)
         if similar is not None:
-            pos, indice = self._plan_similitud(tabla, interna, similar)
+            if interna.join is not None:
+                tablas = [(nombre, tabla), (interna.join.tabla, self._abrir(interna.join.tabla))]
+                lado, pos, indice = self._lado_similitud(tablas, interna, similar)
+                nombre, tabla = tablas[lado]
+                self.plan.append({"node": "HASH JOIN", "table": tablas[1 - lado][0], "operation": "join"})
+            else:
+                pos, indice = self._plan_similitud(tabla, interna, similar)
             entrada = {"table": nombre, "column": tabla.column_names[pos],
                        "k": similar.k, "metric": interna.metrica_vectorial}
-            if indice is not None:
+            if indice is not None and interna.indice_vectorial != VectorIndex.LINEAL:
                 entrada.update(node="VECTOR INDEX SCAN", operation="vector_index_scan",
                                index=indice.tipo_indice)
+                if indice.tipo_indice == "ivf":
+                    entrada["nprobe"] = interna.nprobe or NPROBE_DEFECTO
+                else:
+                    entrada["ef_search"] = interna.ef_search or EF_SEARCH_DEFECTO
             else:
                 entrada.update(node="VECTOR SEQ SCAN", operation="vector_scan")
             self.plan.append(entrada)
+            if self._tiene_agregados(interna) or interna.group_by is not None:
+                self.plan.append({"node": "HASH AGGREGATE", "operation": "aggregate"})
+            return
+
+        textual = self._text_match_de(condicion)
+        if textual is not None:
+            self.plan.append({
+                "node": "TEXT INDEX SCAN",
+                "table": nombre,
+                "operation": "text_index_scan",
+                "index": "SPIMI",
+                "algorithm": textual.algoritmo,
+                "query": textual.consulta,
+            })
+            if self._tiene_agregados(interna):
+                self.plan.append({
+                    "node": "HASH AGGREGATE", "operation": "aggregate",
+                })
             return
 
         _t_plan = time.perf_counter()
@@ -1050,6 +1443,14 @@ class ExecuteVisitor(Visitor):
         return self._texto_condicion(condicion)
 
     def _texto_condicion(self, cond) -> str:
+        if isinstance(cond, MatchExpr):
+            algoritmo = {
+                "tfidf": "TF_IDF", "bm25": "BM25", "spimi": "SPIMI",
+            }.get(cond.algoritmo, cond.algoritmo.upper())
+            columna = self._texto_operando(cond.columna)
+            return (
+                f"MATCH({columna}, '{cond.consulta}') USING {algoritmo}"
+            )
         if isinstance(cond, SimilarToExpr):
             return cond.etiqueta()
         if isinstance(cond, WithinExpr):

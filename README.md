@@ -40,7 +40,7 @@ disco, transacciones con WAL, undo/redo, locks y `EXPLAIN ANALYZE` al estilo Pos
 <td align="center"><h3>22 M</h3>descriptores SIFT y MFCC</td>
 </tr>
 <tr>
-<td align="center"><h3>1.8 ms</h3>por consulta con HNSW<br>(8 veces menos que revisar todo)</td>
+<td align="center"><h3>1.5 ms</h3>por consulta con HNSW<br>(9.5 veces menos que revisar todo)</td>
 <td align="center"><h3>0.98</h3>recall@10 con HNSW</td>
 <td align="center"><h3>8</h3>índices hechos a mano</td>
 <td align="center"><h3>0</h3>bases de datos por debajo</td>
@@ -78,7 +78,8 @@ palabra. Después cada objeto es un histograma de palabras, como un documento.
 
 ## Resultados
 
-Comparamos IVF contra HNSW y euclidiana contra coseno, de 1 000 a 19 800 portadas y 10 000 audios:
+Comparamos la búsqueda lineal (revisar toda la base) contra IVF y HNSW, de 1 000 a 19 800 portadas y
+10 000 audios:
 
 <p align="center">
   <img src="benchmark/multimedia/graficas/consulta_vs_n.png" alt="tiempo por consulta vs tamaño" width="800">
@@ -86,17 +87,46 @@ Comparamos IVF contra HNSW y euclidiana contra coseno, de 1 000 a 19 800 portada
 
 | Coseno, k = 10 | Construir (20k portadas) | Consulta | Recall@10 portadas | Recall@10 audio |
 |---|---|---|---|---|
-| Búsqueda lineal | — | 14 ms | 1.000 | 1.000 |
-| **IVF** | 10 s | 2.6 ms | 0.941 | 0.922 |
-| **HNSW** | 175 s | **1.8 ms** | **0.981** | **0.987** |
+| Búsqueda lineal | — | 14.4 ms | 1.000 | 1.000 |
+| **IVF** | 11 s | 2.6 ms | 0.941 | 0.922 |
+| **HNSW** | 174 s | **1.5 ms** | **0.981** | **0.987** |
 
-- **HNSW casi no se pone más lento al crecer**: con el doble de portadas sigue en ~2 ms, mientras la
-  búsqueda lineal se duplica
+<p align="center">
+  <img src="benchmark/multimedia/graficas/recall_vs_n.png" alt="recall@10 vs tamaño" width="800">
+</p>
+<p align="center"><sub>Recall@10: de los 10 vecinos exactos (búsqueda lineal), cuántos devuelve cada índice</sub></p>
+
+- **Con índice, cada consulta es 4–10 veces más rápida que la búsqueda lineal**, y la ventaja crece
+  con N: con el doble de portadas HNSW sigue en ~1.5 ms mientras la lineal se duplica. Con menos de
+  ~2 500 objetos la lineal todavía gana
 - **IVF se construye 17 veces más rápido**, ideal si la colección cambia seguido
 - **Coseno le gana a la euclidiana** sobre vectores sin normalizar: con euclidiana el recall cae a 0.80
 
+También probamos consultas como las de una app real. Con fotos reales de **600 CDs, vinilos y casetes**
+bajadas de Discogs, el 66 % encuentra su portada digital en el top 10 (~70 % en CDs y vinilos, casi siempre
+primera). Con data augmentation, rotar, pasar a blanco y negro o cambiar los colores casi no afecta
+(0.99–1.00), porque SIFT trabaja en gris y es invariante a la rotación. Un fragmento de audio grabado con
+celular, en cambio, no acierta nunca, porque MFCC no aguanta que se pierdan frecuencias.
+
 El análisis completo, con galerías de aciertos y errores y la comparación con Faiss y hnswlib, está en
 [`benchmark/multimedia/`](benchmark/multimedia/README.md).
+
+Para texto comparamos TF-IDF + coseno, BM25 y el GIN de PostgreSQL con 10 000 letras, consultas de
+1, 3 y 5+ palabras, Precision@10 y Recall@10:
+
+<p align="center">
+  <img src="benchmark/text_based/comparacion_consultas_ms.png" alt="tiempo de consulta textual por longitud" width="800">
+</p>
+
+| Texto, N = 10 000 | Construir | Consulta (5+ palabras) | P@10 | R@10 |
+|---|---:|---:|---:|---:|
+| TF-IDF + coseno | 7.7 s | 18.4 ms | 0.467 | 0.036 |
+| **BM25** | **7.2 s** | **13.4 ms** | **0.967** | **0.066** |
+| GIN (PostgreSQL) | 5.9 s | 146.4 ms | 0.333 | 0.033 |
+
+BM25 gana en ranking y en consulta; GIN construye más rápido, pero suma el costo de la tabla y del
+`tsvector` en disco y ordena peor con `ts_rank_cd`. El detalle está en
+[`benchmark/text_based/`](benchmark/text_based/README.md).
 
 ## Pruébalo
 
@@ -166,7 +196,9 @@ Pruebas: `python run_all_tests.py`.
 | Texto: SPIMI, TF-IDF, BM25 (Parte 3) | [`docs/SPIMI.md`](docs/SPIMI.md) |
 | Multimedia: SIFT, MFCC, codebook, TF-IDF (Parte 4) | [`multimedia/README.md`](multimedia/README.md) |
 | Índices vectoriales: métricas, IVF, HNSW | [`indexes/VECTOR_README.md`](indexes/VECTOR_README.md) |
+| chutaDB frente a gestores vectoriales reales, con fuentes | [`docs/BASE_VECTORIAL.md`](docs/BASE_VECTORIAL.md) |
 | Benchmark multimedia | [`benchmark/multimedia/README.md`](benchmark/multimedia/README.md) |
+| Benchmark de texto: TF-IDF vs BM25 vs GIN | [`benchmark/text_based/README.md`](benchmark/text_based/README.md) |
 | Dataset: fuentes, cómo se descarga, columnas | [`data/README.md`](data/README.md) |
 
 ### Organización del código
@@ -196,20 +228,82 @@ Pruebas: `python run_all_tests.py`.
 ### SQL de la Parte 4
 
 ```
+Tipo       ::= ... | IMAGE | AUDIO
+Import     ::= IMPORT INTO id FROM ( 'archivo.csv' | 'carpeta/' )
 SimilarTo  ::= SIMILAR_TO ( 'ruta' , [k =] num )
-UsingVec   ::= USING (IVF | HNSW) [WITH METRIC = (cosine | euclidean | dot)]
+UsingVec   ::= USING (IVF | HNSW | SEQ) [WithVec] | WithVec
+WithVec    ::= WITH OptVec {, OptVec}*
+OptVec     ::= METRIC = (cosine | euclidean | dot) | NPROBE = num | EF_SEARCH = num
 Proj       ::= ... | SIMILARITY_SCORE ( ) [AS id]
 CreateIdx  ::= CREATE INDEX ON id ( columna ) USING (IVF | HNSW)
 ```
 
+**Con cualquier dataset: columnas `IMAGE` y `AUDIO`.** El motor no depende de nuestras canciones.
+Una columna `IMAGE` o `AUDIO` guarda la ruta del archivo, y el tipo le dice al motor si sacar SIFT o MFCC.
+Al crear el índice, **cada columna entrena su propio codebook e idf** con los archivos de esa tabla
+(`storage/modelo_multimedia.py`, K = raíz del total de descriptores, entre 8 y 1024). El modelo se guarda
+junto al índice (`<índice>_modelo.npz`) y los `INSERT` siguientes se vectorizan con él.
+
+```sql
+CREATE TABLE fotos (id INT PRIMARY KEY, nombre VARCHAR(60), foto IMAGE) USING HEAP;
+IMPORT INTO fotos FROM 'mis_fotos/';          -- una fila por imagen: id 1, 2, 3…, nombre = archivo
+CREATE INDEX ON fotos (foto) USING HNSW;      -- entrena el codebook con estas fotos
+
+SELECT nombre, SIMILARITY_SCORE() AS score FROM fotos
+    WHERE SIMILAR_TO('consulta.jpg', k=5) ORDER BY score DESC;
+```
+
+- **Carga:** `IMPORT INTO t FROM 'carpeta/'` mete una fila por imagen o audio. La primera columna `INT`
+  se numera y la primera `VARCHAR` recibe el nombre del archivo. Con un CSV, las rutas de las columnas
+  `IMAGE`/`AUDIO` pueden ser relativas al CSV o a `data/`. En la consola web también se puede subir un
+  `.zip` (solo imágenes, solo audios, o un CSV con sus archivos): se arma la tabla, se importa y se crea
+  un índice HNSW por cada columna multimedia
+- `IMAGE` y `AUDIO` no son palabras reservadas: una columna se puede seguir llamando `audio`
+- Las tablas con columnas multimedia siguen siendo tablas normales: `JOIN`, `GROUP BY`, índices B+,
+  `UPDATE` y `DELETE` funcionan igual (el parser no acepta alias de tabla: usar el nombre completo)
+- Sin índice, `SIMILAR_TO` sobre una columna `IMAGE`/`AUDIO` entrena el modelo en el momento y hace
+  búsqueda lineal (el modelo queda en memoria mientras la tabla no cambie)
+- Una columna `VARCHAR` con rutas sigue funcionando como antes, con el codebook de nuestro dataset
+  (`data/features/`)
+
+**Benchmark por SQL con tu propia carpeta**, de punta a punta por el motor: `CREATE TABLE`, `IMPORT`,
+`CREATE INDEX` y `SIMILAR_TO` con y sin índice:
+
+```bash
+python -m benchmark.multimedia.benchmark_sql --carpeta mis_fotos/ --tamanos 100 250 500 1000
+```
+
+Los resultados quedan en `benchmark/multimedia/sql/` (ver
+[benchmark por SQL](benchmark/multimedia/README.md#benchmark-por-sql-con-cualquier-carpeta)).
+
+**Detalles de `SIMILAR_TO`:**
+
 - La ruta de la consulta puede ser absoluta o relativa a `data/` y no tiene que estar en la tabla:
-  se le saca el vector con `ExtractFeatures`. La extensión dice si es imagen o audio
-- La columna indexada es un `VARCHAR` con rutas de imágenes o de audios (no mezcladas)
-- Sin `USING` se usa el índice vectorial que tenga la tabla, y si no tiene, búsqueda lineal.
-  Sin `WITH METRIC` se usa coseno
+  se le saca el vector con el mismo modelo de la columna. La extensión dice si es imagen o audio
+- La columna puede ser `IMAGE`, `AUDIO` o un `VARCHAR` con rutas de imágenes o de audios (no mezcladas)
+- Sin `USING` se usa el índice vectorial que tenga la tabla (HNSW si tiene los dos, si no IVF), y si
+  no tiene, búsqueda lineal. `USING SEQ` (o `LINEAL`) fuerza la búsqueda lineal exacta aunque haya
+  índice. Sin `WITH METRIC` se usa coseno
 - `SIMILARITY_SCORE()`: mayor = más parecido. Coseno y dot dan la similitud, euclidean da 1 / (1 + d)
-- Se combina con otras condiciones con `AND` y con `LIMIT`. No va dentro de un `OR`, con `JOIN` ni
-  con agregaciones
+- **Filtros:** con otras condiciones en el `AND`, primero se ve qué filas cumplen. Si son 2 000 o menos se
+  comparan todas (pre-filtro exacto); si son más, se busca en el índice saltando las que no cumplen. Siempre
+  salen k filas si existen. `EXPLAIN` dice qué estrategia usó
+- **Parámetros:** `WITH NPROBE = n` (IVF, celdas que se abren) y `WITH EF_SEARCH = n` (HNSW), como
+  `ivfflat.probes` y `hnsw.ef_search` de pgvector. Más alto = más preciso y más lento
+- **`JOIN` y `GROUP BY`:** `SIMILAR_TO` se combina con un `JOIN` (la columna de imagen o audio puede estar
+  en cualquiera de las dos tablas) y con `GROUP BY` / `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` sobre las k filas
+  más parecidas. No va dentro de un `OR` ni dos veces en la misma consulta
+
+```sql
+SELECT canciones.titulo, artistas.nombre, SIMILARITY_SCORE() AS score
+    FROM canciones JOIN artistas ON canciones.id_artista = artistas.id
+    WHERE artistas.genero = 'Rock' AND SIMILAR_TO('consulta.mp3', k=5) WITH EF_SEARCH = 100;
+
+SELECT genero, COUNT(*) AS n FROM canciones WHERE SIMILAR_TO('foto.jpg', k=20) GROUP BY genero;
+```
+
+Cómo se compara esto con pgvector, Qdrant, Weaviate, Milvus y Faiss, qué falta y por qué *embeddings*
+de redes neuronales serían mejores que SIFT/MFCC: [`docs/BASE_VECTORIAL.md`](docs/BASE_VECTORIAL.md).
 
 ```
 EXPLAIN ANALYZE SELECT titulo, SIMILARITY_SCORE() AS score FROM canciones

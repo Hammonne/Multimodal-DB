@@ -3,30 +3,40 @@ import heapq
 
 from text_based.spimi import tokenize
 
+
 class TFIDFCosine:
     def __init__(self, spimi_index):
         self.index = spimi_index
         self.doc_norms = {}
+        self.doc_count = 0
         self.ready = False
 
     def build_stats(self):
         self.index.load()
 
-        for doc_id in self.index.doc_lengths:
-            self.doc_norms[doc_id] = 0.0
+        self.doc_count = len(self.index.doc_lengths)
+        self.doc_norms = {
+            doc_id: 0.0 for doc_id in self.index.doc_lengths
+        }
+
+        if self.doc_count == 0:
+            self.ready = True
+            return
 
         for term in self.index.term_offsets:
             postings = self.index.get_postings(term)
 
             df = len(postings)
-
             if df == 0:
                 continue
 
-            for doc_id, frequency in postings:
-                tf = 1 + math.log10(frequency)
-                weight = tf / df
+            # TF-IDF clasico: tf * log(N / df).  El tf es la frecuencia
+            # cruda del termino en el documento; el idf premia los terminos
+            # que aparecen en pocos documentos.
+            idf = math.log10(self.doc_count / df)
 
+            for doc_id, frequency in postings:
+                weight = frequency * idf
                 self.doc_norms[doc_id] += weight ** 2
 
         for doc_id in self.doc_norms:
@@ -58,8 +68,8 @@ class TFIDFCosine:
                 continue
 
             df = len(postings)
-            tf = 1 + math.log10(frequency)
-            weight = tf / df
+            idf = math.log10(self.doc_count / df)
+            weight = frequency * idf
 
             query_weights[term] = weight
             query_norm_squared += weight ** 2
@@ -75,10 +85,10 @@ class TFIDFCosine:
             postings = self.index.get_postings(term)
 
             df = len(postings)
+            idf = math.log10(self.doc_count / df)
 
             for doc_id, frequency in postings:
-                tf = 1 + math.log10(frequency)
-                doc_weight = tf / df
+                doc_weight = frequency * idf
 
                 contribution = query_weight * doc_weight
 
@@ -102,4 +112,3 @@ class TFIDFCosine:
             scores,
             key=lambda item: item[1]
         )
-

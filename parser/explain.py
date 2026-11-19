@@ -151,6 +151,23 @@ def _nodo_scan(entrada, stats, filtro):
             nodo.detalles.append(f"Filter: ({filtro})")
         return nodo
 
+    elif tipo == "TEXT INDEX SCAN":
+        algoritmo = entrada.get("algorithm", "spimi")
+        etiqueta_algoritmo = {
+            "tfidf": "TF_IDF", "bm25": "BM25", "spimi": "SPIMI",
+        }.get(str(algoritmo).lower(), str(algoritmo).upper())
+        etiqueta = f"Text Index Scan using {etiqueta_algoritmo} on {tabla}"
+        filas = max(1, int(entrada.get("matches", 0) or 10))
+        costo_inicial = 0.29
+        costo_total = costo_inicial + filas * CPU_INDEX_TUPLE_COST
+        nodo = NodoPlan(etiqueta, costo_inicial, costo_total, filas, ancho,
+                        medicion=entrada)
+        if entrada.get("query"):
+            nodo.detalles.append(f"Query: {entrada['query']}")
+        if filtro:
+            nodo.detalles.append(f"Filter: ({filtro})")
+        return nodo
+
     elif tipo in ("VECTOR INDEX SCAN", "VECTOR SEQ SCAN"):
         columna = entrada.get("column", "")
         k = int(entrada.get("k", 1))
@@ -167,6 +184,12 @@ def _nodo_scan(entrada, stats, filtro):
             costo_total = costo_inicial + filas_tabla * CPU_TUPLE_COST
         nodo = NodoPlan(etiqueta, costo_inicial, costo_total, k, ancho, medicion=entrada)
         nodo.detalles.append(f"Order By: k-NN por similitud (k={k}, metrica={entrada.get('metric', 'coseno')})")
+        if entrada.get("nprobe"):
+            nodo.detalles.append(f"Parametros: nprobe={entrada['nprobe']}")
+        if entrada.get("ef_search"):
+            nodo.detalles.append(f"Parametros: ef_search={entrada['ef_search']}")
+        if entrada.get("strategy"):
+            nodo.detalles.append(f"Filtro: {entrada['strategy']}")
         if entrada.get("candidates"):
             nodo.detalles.append(f"Vectores revisados: {entrada['candidates']}")
         if filtro:
@@ -226,7 +249,7 @@ def construir(entradas, stats, filtro=None, limite=None, total_ms=0.0):
 
     scan = _buscar(entradas, "SEQUENTIAL SCAN", "INDEX SCAN", "BITMAP INDEX SCAN",
                    "RTREE INDEX SCAN", "RTREE KNN", "VECTOR INDEX SCAN",
-                   "VECTOR SEQ SCAN")
+                   "VECTOR SEQ SCAN", "TEXT INDEX SCAN")
     if scan is not None:
         raiz = _nodo_scan(scan, stats, filtro)
     else:

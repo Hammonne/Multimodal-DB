@@ -32,6 +32,13 @@ hnsw.guardar("portadas.npz"); hnsw = HNSW.cargar("portadas.npz")
 `buscar` devuelve `(ids, distancias)` del más al menos parecido. `candidatos` dice cuántos vectores
 comparó la última búsqueda (con lineal serían todos).
 
+**Los ids son enteros.** Si no se pasan, cada vector recibe su posición (0, 1, 2…). Si los objetos
+tienen ids que no son números, como las rutas `covers/123.jpg` de las portadas, se agregan sin ids y
+la posición se traduce después con un arreglo aparte (`ids_reales[posicion]`). Así lo hacen el motor
+(`storage/vector_index.py`, con los RID) y la web (`web/backend/multimedia_search.py`). Si se guardan
+ids de texto, `np.load` no puede volver a leer el `.npz` sin `allow_pickle`, y `guardar()` / `cargar()`
+dejan de funcionar.
+
 ## Métricas (`metricas.py`)
 
 | Métrica | Similitud | Distancia que usan los índices | Alias en SQL |
@@ -160,6 +167,50 @@ imágenes o audios crea un `VectorSecondaryIndex`, igual que el R-Tree se cuelga
 - Se guarda en `<índice>.npz` (vectores y rids) + `<índice>_indice.npz` (la estructura). Al abrir, si
   la tabla cambió con el índice cerrado, se reconstruye
 - Parámetros: IVF con nlist = 100 (o N si hay menos filas) y nprobe = 10; HNSW con M = 16, ef_construction = 100 y ef_search = 50
+
+### Columnas `IMAGE` y `AUDIO`: un modelo por índice
+
+Si la columna es `IMAGE` o `AUDIO` (y no un `VARCHAR`), el índice no usa el codebook de nuestro dataset:
+entrena uno propio con los archivos de la tabla (`storage/modelo_multimedia.py`). Así el motor sirve
+para cualquier colección:
+
+1. Al crear el índice se sacan los descriptores de cada archivo (SIFT o MFCC según el tipo de columna)
+2. K-Means (`MiniBatchKMeans`, muestra de hasta 200 000 descriptores) con **K = raíz del total de
+   descriptores, entre 8 y 1024**. Con 20 000 portadas da 1024, como el codebook general; con 100
+   fotos da ~200
+3. Se calcula el idf de la tabla y cada archivo pasa a un vector TF-IDF, que entra al IVF o al HNSW
+4. El modelo se guarda en `<índice>_modelo.npz` (centroides, media, desviación e idf). Los `INSERT`
+   siguientes y las consultas se vectorizan con ese modelo
+5. Si se crea el índice con la tabla vacía, las filas que llegan esperan y el modelo se entrena con
+   ellas en la primera consulta
+
+Sin índice, la búsqueda lineal sobre una columna `IMAGE`/`AUDIO` entrena el mismo modelo en el momento
+y lo deja en memoria mientras la tabla no cambie. Los descriptores de cada archivo se guardan en una
+caché, así la lineal, el IVF y el HNSW no los vuelven a calcular.
+
+Con índice, `USING SEQ` compara contra **todos los vectores del índice** (con su mismo modelo), así es la
+respuesta exacta de lo que el índice aproxima.
+
+### Búsqueda con filtro
+
+`SIMILAR_TO` con otras condiciones en el `AND` (`WHERE genero = 'Rock' AND SIMILAR_TO(...)`):
+
+1. Se evalúa el resto del `WHERE` sobre la tabla y se arma el conjunto de filas que cumplen
+2. **Pre-filtro exacto** si cumplen 2 000 filas o menos (`UMBRAL_PREFILTRO`): se comparan solo esos vectores
+   (`VectorSecondaryIndex.exacto`)
+3. **Filtro dentro del índice** si cumplen más (`knn(..., rids_permitidos=...)`):
+   - HNSW: `buscar(q, k, ef_search, permitido)`. En el nivel 0 el grafo se recorre igual, pero solo los nodos
+     permitidos entran a la lista de resultados; los demás siguen sirviendo de puente (como hnswlib y Qdrant)
+   - IVF: `buscar(q, k, nprobe, permitido)`. Solo se comparan los permitidos de cada celda; si el filtro deja
+     una fracción *f*, se abren `nprobe / f` celdas, y si aun así no hay k se siguen abriendo
+
+Con 1 000 portadas y un filtro que deja el 5 % de las filas, el HNSW y el IVF filtrados dan recall@10 = 1.0.
+Detalle, números y cómo lo hacen otros gestores en [`docs/BASE_VECTORIAL.md`](../docs/BASE_VECTORIAL.md).
+
+### Parámetros desde SQL
+
+`WITH NPROBE = n` (IVF) y `WITH EF_SEARCH = n` (HNSW) cambian los valores por defecto (10 y 50) solo para esa
+consulta, como `SET ivfflat.probes` y `SET hnsw.ef_search` en pgvector. `EXPLAIN` los muestra.
 
 La sintaxis SQL está en el [README principal](../README.md#sql-de-la-parte-4).
 

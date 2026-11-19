@@ -287,8 +287,14 @@ class PrintVisitor(Visitor):
             print(" WHERE ", end="")
             stm.condicion.accept(self)
         if stm.indice_vectorial != VectorIndex.NINGUNO:
-            print(f" USING {stm.indice_vectorial.name} WITH METRIC={stm.metrica_vectorial}",
-                  end="")
+            nombre = "SEQ" if stm.indice_vectorial == VectorIndex.LINEAL else stm.indice_vectorial.name
+            print(f" USING {nombre} WITH METRIC={stm.metrica_vectorial}", end="")
+        elif getattr(stm, "nprobe", None) is not None or getattr(stm, "ef_search", None) is not None:
+            print(f" WITH METRIC={stm.metrica_vectorial}", end="")
+        if getattr(stm, "nprobe", None) is not None:
+            print(f", NPROBE={stm.nprobe}", end="")
+        if getattr(stm, "ef_search", None) is not None:
+            print(f", EF_SEARCH={stm.ef_search}", end="")
         if stm.group_by is not None:
             print(" GROUP BY ", end="")
             stm.group_by.accept(self)

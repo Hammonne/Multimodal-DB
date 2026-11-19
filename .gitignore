@@ -19,3 +19,4 @@ typst/
 *.env
 .env.*
 !.env.example
+.venv/

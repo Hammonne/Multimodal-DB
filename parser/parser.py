@@ -181,6 +181,13 @@ class Parser:
             cd.tipo = DataType.DATE_TYPE
         elif self.match(Token.Type.POINT):
             cd.tipo = DataType.POINT_TYPE
+        elif self.check(Token.Type.ID) and self.current.text.upper() in ("IMAGE", "IMAGEN"):
+            # IMAGE y AUDIO no son palabras reservadas: así una columna se puede seguir llamando "audio"
+            self.advance()
+            cd.tipo = DataType.IMAGE_TYPE
+        elif self.check(Token.Type.ID) and self.current.text.upper() == "AUDIO":
+            self.advance()
+            cd.tipo = DataType.AUDIO_TYPE
         elif self.match(Token.Type.VARCHAR):
             cd.tipo = DataType.VARCHAR_TYPE
             if not self.match(Token.Type.LPAREN):
@@ -235,8 +242,15 @@ class Parser:
             ci.tipo = IndexKind.HNSW_IDX
         elif self.match(Token.Type.SPIMI):
             ci.tipo = IndexKind.SPIMI_IDX
+        elif self.match(Token.Type.TF_IDF):
+            ci.tipo = IndexKind.TFIDF_IDX
+        elif self.match(Token.Type.BM25):
+            ci.tipo = IndexKind.BM25_IDX
         else:
-            self.error("se esperaba BTREE, HASH, BITMAP, RTREE, IVF, HNSW o SPIMI")
+            self.error(
+                "se esperaba BTREE, HASH, BITMAP, RTREE, IVF, HNSW, "
+                "SPIMI, TF_IDF o BM25"
+            )
 
         if self.match(Token.Type.CLUSTERED):
             ci.clustered = True
@@ -249,8 +263,13 @@ class Parser:
         # por el obligaria a copiar cada fila al heap, que ya es donde vive
         if ci.clustered and ci.tipo == IndexKind.BITMAP_IDX:
             self.error_semantico("un indice BITMAP no puede ser CLUSTERED")
-        if ci.clustered and ci.tipo in (IndexKind.IVF_IDX, IndexKind.HNSW_IDX, IndexKind.SPIMI_IDX):
-            self.error_semantico("un indice IVF o HNSW no puede ser CLUSTERED")
+        if ci.clustered and ci.tipo in (
+            IndexKind.IVF_IDX, IndexKind.HNSW_IDX, IndexKind.SPIMI_IDX,
+            IndexKind.TFIDF_IDX, IndexKind.BM25_IDX,
+        ):
+            self.error_semantico(
+                "un indice IVF, HNSW o de texto no puede ser CLUSTERED"
+            )
         return ci
 
     # DropTable ::= DROP TABLE id
@@ -304,6 +323,8 @@ class Parser:
             s.condicion = self.parse_cond()
             if self.check(Token.Type.USING):
                 self.parse_using_vectorial(s)
+            elif self.check(Token.Type.WITH):
+                self.parse_opciones_vectoriales(s)
 
         if self.match(Token.Type.GROUP):
             if not self.match(Token.Type.BY):
@@ -328,29 +349,59 @@ class Parser:
         self.validar_similitud(s)
         return s
 
-    # UsingVec ::= USING (IVF | HNSW) [WITH METRIC = id]
-    # sin WITH METRIC se usa coseno
+    # UsingVec ::= USING (IVF | HNSW | SEQ) [WithVec] | WithVec
+    # WithVec  ::= WITH OptVec {, OptVec}*
+    # OptVec   ::= METRIC = id | NPROBE = num | EF_SEARCH = num
+    # sin WITH METRIC se usa coseno. SEQ (o LINEAL, SEQUENTIAL) fuerza la búsqueda lineal exacta
     def parse_using_vectorial(self, s):
         self.match(Token.Type.USING)
         if self.match(Token.Type.IVF):
             s.indice_vectorial = VectorIndex.IVF
         elif self.match(Token.Type.HNSW):
             s.indice_vectorial = VectorIndex.HNSW
+        elif self.match(Token.Type.SEQUENTIAL):
+            s.indice_vectorial = VectorIndex.LINEAL
+        elif self.check(Token.Type.ID) and self.current.text.upper() in ("SEQ", "LINEAL"):
+            self.advance()
+            s.indice_vectorial = VectorIndex.LINEAL
         else:
-            self.error("se esperaba IVF o HNSW despues de USING")
+            self.error("se esperaba IVF, HNSW o SEQ despues de USING")
 
-        if self.match(Token.Type.WITH):
-            if not self.match(Token.Type.METRIC):
-                self.error("se esperaba METRIC despues de WITH")
-            if not self.match(Token.Type.EQ):
-                self.error("se esperaba = despues de METRIC")
-            if not (self.match(Token.Type.ID) or self.match(Token.Type.STR)):
-                self.error("se esperaba el nombre de la metrica")
-            nombre = self.previous.text.lower()
-            if nombre not in METRICAS_VECTORIALES:
-                self.error_semantico(f"metrica desconocida '{self.previous.text}', "
-                                     "se esperaba euclidean, cosine o dot")
-            s.metrica_vectorial = METRICAS_VECTORIALES[nombre]
+        if self.check(Token.Type.WITH):
+            self.parse_opciones_vectoriales(s)
+
+    def parse_opciones_vectoriales(self, s):
+        self.match(Token.Type.WITH)
+        while True:
+            if self.match(Token.Type.METRIC):
+                if not self.match(Token.Type.EQ):
+                    self.error("se esperaba = despues de METRIC")
+                if not (self.match(Token.Type.ID) or self.match(Token.Type.STR)):
+                    self.error("se esperaba el nombre de la metrica")
+                nombre = self.previous.text.lower()
+                if nombre not in METRICAS_VECTORIALES:
+                    self.error_semantico(f"metrica desconocida '{self.previous.text}', "
+                                         "se esperaba euclidean, cosine o dot")
+                s.metrica_vectorial = METRICAS_VECTORIALES[nombre]
+            elif self.check(Token.Type.ID) and self.current.text.upper() in ("NPROBE", "EF_SEARCH", "EF"):
+                opcion = self.current.text.upper()
+                self.advance()
+                if not self.match(Token.Type.EQ):
+                    self.error(f"se esperaba = despues de {opcion}")
+                if not self.match(Token.Type.NUM) or "." in self.previous.text or int(self.previous.text) < 1:
+                    self.error_semantico(f"{opcion} tiene que ser un entero mayor que 0")
+                if opcion == "NPROBE":
+                    s.nprobe = int(self.previous.text)
+                else:
+                    s.ef_search = int(self.previous.text)
+            else:
+                self.error("se esperaba METRIC, NPROBE o EF_SEARCH despues de WITH")
+            if not self.match(Token.Type.COMA):
+                break
+        if s.nprobe is not None and s.indice_vectorial == VectorIndex.HNSW:
+            self.error_semantico("NPROBE es un parametro de IVF; para HNSW se usa EF_SEARCH")
+        if s.ef_search is not None and s.indice_vectorial == VectorIndex.IVF:
+            self.error_semantico("EF_SEARCH es un parametro de HNSW; para IVF se usa NPROBE")
 
     # reglas que no se ven en la gramatica: un solo SIMILAR_TO, no dentro de un OR,
     # y USING IVF/HNSW o SIMILARITY_SCORE() solo si hay SIMILAR_TO
@@ -372,6 +423,8 @@ class Parser:
         if not similares and not tiene_match:
             if s.indice_vectorial != VectorIndex.NINGUNO:
                 self.error_semantico("USING IVF/HNSW solo se usa con SIMILAR_TO")
+            if s.nprobe is not None or s.ef_search is not None:
+                self.error_semantico("NPROBE y EF_SEARCH solo se usan con SIMILAR_TO")
             if usa_score:
                 self.error_semantico("SIMILARITY_SCORE() solo se usa con SIMILAR_TO")
 
@@ -769,13 +822,15 @@ class Parser:
         if not self.match(Token.Type.RPAREN):
             self.error("se esperaba ) al cerrar MATCH")
         if not self.match(Token.Type.USING):
-            self.error("MATCH requiere USING BM25 o USING TF_IDF")
+            self.error("MATCH requiere USING SPIMI, BM25 o TF_IDF")
         if self.match(Token.Type.BM25):
             expr.algoritmo = "bm25"
         elif self.match(Token.Type.TF_IDF):
             expr.algoritmo = "tfidf"
+        elif self.match(Token.Type.SPIMI):
+            expr.algoritmo = "spimi"
         else:
-            self.error("se esperaba BM25 o TF_IDF despues de USING")
+            self.error("se esperaba SPIMI, BM25 o TF_IDF despues de USING")
         return expr
 
     # OrderExpr ::= Distancia | SIMILARITY_SCORE ( ) | ColRef

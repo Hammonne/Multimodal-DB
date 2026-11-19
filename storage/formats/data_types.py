@@ -32,7 +32,13 @@ FIXED_DATA_TYPES = {
     "name": ["64s", 64],
     # Tipo espacial: par (x, y) de doble precision
     "point": [">dd", 16],
+    # Tipos multimedia: se guarda la ruta del archivo (relativa a data/ o absoluta);
+    # el tipo le dice al motor si sacar SIFT (imagen) o MFCC (audio)
+    "image": ["255s", 255],
+    "audio": ["255s", 255],
 }
+
+MEDIA_DATA_TYPES = {"image": "sift", "audio": "mfcc"}
 
 STRING_DATA_TYPE_STARTS = ["bit", "char", "varchar"]
 STRING_DATA_TYPES = ["text", "bytea", "varbit", "json", "jsonb", "xml", "string", "str"]

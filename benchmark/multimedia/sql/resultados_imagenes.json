@@ -1,0 +1,67 @@
+{
+ "carpeta": "/private/tmp/claude-503/-Users-luciagurbillon-Documents-github-things-Multimodal-DB/b5db5943-b8b4-4eb0-8523-e371c0dff80b/scratchpad/bench_carpetas/imagenes",
+ "tipo": "IMAGE",
+ "k": 10,
+ "filas": [
+  {
+   "n": 100,
+   "importar_s": 0.03896520799025893,
+   "lineal_modelo_s": 6.9197617919999175,
+   "lineal_ms": 2.066933332631985,
+   "ivf_construir_s": 3.3163640000275336,
+   "ivf_ms": 1.520173598934586,
+   "ivf_recall": 1.0,
+   "ivf_kb": 281.29296875,
+   "k_codebook": 212,
+   "hnsw_construir_s": 3.503806333988905,
+   "hnsw_ms": 0.9904333332087846,
+   "hnsw_recall": 1.0,
+   "hnsw_kb": 220.23828125
+  },
+  {
+   "n": 250,
+   "importar_s": 0.08823287498671561,
+   "lineal_modelo_s": 12.407520750013646,
+   "lineal_ms": 3.9901833321588738,
+   "ivf_construir_s": 4.011363625002559,
+   "ivf_ms": 1.3760236014301577,
+   "ivf_recall": 0.9,
+   "ivf_kb": 642.9140625,
+   "k_codebook": 337,
+   "hnsw_construir_s": 5.036404874990694,
+   "hnsw_ms": 1.4291125000454485,
+   "hnsw_recall": 1.0,
+   "hnsw_kb": 567.6484375
+  },
+  {
+   "n": 500,
+   "importar_s": 0.34809641703031957,
+   "lineal_modelo_s": 23.194423875014763,
+   "lineal_ms": 8.675659698201343,
+   "ivf_construir_s": 7.027396041026805,
+   "ivf_ms": 1.6436736332252622,
+   "ivf_recall": 0.8933333333333333,
+   "ivf_kb": 1370.8515625,
+   "k_codebook": 475,
+   "hnsw_construir_s": 9.454889000044204,
+   "hnsw_ms": 1.7239791651566825,
+   "hnsw_recall": 1.0,
+   "hnsw_kb": 1297.59375
+  },
+  {
+   "n": 1000,
+   "importar_s": 1.4503882079734467,
+   "lineal_modelo_s": 39.63255824998487,
+   "lineal_ms": 16.920786131716646,
+   "ivf_construir_s": 8.802738333004527,
+   "ivf_ms": 1.9274999989041437,
+   "ivf_recall": 0.8833333333333333,
+   "ivf_kb": 3251.2578125,
+   "k_codebook": 671,
+   "hnsw_construir_s": 14.363555915944744,
+   "hnsw_ms": 2.100534733229627,
+   "hnsw_recall": 1.0,
+   "hnsw_kb": 3212.453125
+  }
+ ]
+}

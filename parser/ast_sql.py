@@ -16,6 +16,8 @@ class IndexKind(Enum):
     IVF_IDX = auto()      # vectoriales (2.4.2), sobre una columna con rutas de archivos
     HNSW_IDX = auto()
     SPIMI_IDX = auto()
+    TFIDF_IDX = auto()
+    BM25_IDX = auto()
 
 
 # Tipos de dato del catalogo
@@ -26,6 +28,8 @@ class DataType(Enum):
     DATE_TYPE = auto()
     VARCHAR_TYPE = auto()
     POINT_TYPE = auto()
+    IMAGE_TYPE = auto()
+    AUDIO_TYPE = auto()
 
 
 # Operadores relacionales soportados
@@ -228,9 +232,10 @@ class WithinExpr:
 
 # Indices vectoriales; NINGUNO es la busqueda lineal exacta
 class VectorIndex(Enum):
-    NINGUNO = auto()
+    NINGUNO = auto()    # sin USING: el índice de la tabla (HNSW, si no IVF) o búsqueda lineal
     IVF = auto()
     HNSW = auto()
+    LINEAL = auto()     # USING SEQ: búsqueda lineal exacta aunque haya índice
 
 
 # Nombres que acepta WITH METRIC=, con el nombre que usa indexes/metricas.py
@@ -435,6 +440,8 @@ class SelectStmt(Stmt):
         self.haylimite = False
         self.indice_vectorial = VectorIndex.NINGUNO   # USING IVF | HNSW
         self.metrica_vectorial = "coseno"             # WITH METRIC=
+        self.nprobe = None                            # WITH NPROBE= (ivf: celdas que se abren)
+        self.ef_search = None                         # WITH EF_SEARCH= (hnsw: tamaño de la lista)
 
     def accept(self, visitor):
         return visitor.visit_select_stmt(self)

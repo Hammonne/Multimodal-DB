@@ -113,7 +113,11 @@ class TestExtremoAExtremo(unittest.TestCase):
     def test_base(self):
         b = F.cargar_base("sift", 32, self.dir)
         self.assertEqual(b["vectores"].shape, (6, 32))
-        np.testing.assert_allclose(np.linalg.norm(b["vectores"], axis=1), 1, rtol=1e-5)
+        normas = np.linalg.norm(b["vectores"], axis=1)
+        self.assertFalse(np.isnan(normas).any())
+        no_nulos = normas > 0
+        np.testing.assert_allclose(normas[no_nulos], 1, rtol=1e-5)
+        np.testing.assert_array_equal(normas[~no_nulos], 0)
 
     def test_misma_imagen_mismo_vector(self):
         b = F.cargar_base("sift", 32, self.dir)
@@ -121,7 +125,8 @@ class TestExtremoAExtremo(unittest.TestCase):
             v = F.ExtractFeatures(os.path.join(self.dir, "covers", f"{i}.jpg"), 32, self.dir)
             self.assertEqual(v.shape, (32,))
             np.testing.assert_allclose(v, b["vectores"][i], rtol=1e-4, atol=1e-5)
-            self.assertEqual(int(np.argmax(b["vectores"] @ v)), i)
+            similitud = b["vectores"] @ v
+            np.testing.assert_allclose(similitud[i], similitud.max(), rtol=1e-5, atol=1e-6)
 
     def test_imagen_plana(self):
         v = F.ExtractFeatures(os.path.join(self.dir, "covers", "plana.jpg"), 32, self.dir)

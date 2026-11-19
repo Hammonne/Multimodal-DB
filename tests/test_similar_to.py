@@ -63,9 +63,16 @@ class TestSimilarTo(unittest.TestCase):
         s = uno("SELECT * FROM t WHERE SIMILAR_TO('a.mp3', k=3) USING HNSW")
         self.assertEqual(s.metrica_vectorial, "coseno")
 
-    def test_sin_using_es_lineal(self):
+    def test_sin_using(self):
+        # sin USING el executor elige: el índice de la tabla o, si no hay, búsqueda lineal
         s = uno("SELECT * FROM t WHERE SIMILAR_TO('a.mp3', k=3)")
         self.assertEqual(s.indice_vectorial, VectorIndex.NINGUNO)
+
+    def test_using_seq_es_lineal(self):
+        for palabra in ("SEQ", "seq", "LINEAL", "SEQUENTIAL"):
+            s = uno(f"SELECT * FROM t WHERE SIMILAR_TO('a.jpg', k=3) USING {palabra} WITH METRIC=dot")
+            self.assertEqual(s.indice_vectorial, VectorIndex.LINEAL)
+            self.assertEqual(s.metrica_vectorial, "producto_punto")
 
     def test_k_sin_nombre(self):
         self.assertEqual(uno("SELECT * FROM t WHERE SIMILAR_TO('a.jpg', 7)").condicion.k, 7)
@@ -122,7 +129,7 @@ class TestSimilarTo(unittest.TestCase):
             "SELECT * FROM t WHERE SIMILAR_TO(a.jpg, k=3)": "entre comillas",
             "SELECT * FROM t WHERE SIMILAR_TO('a.jpg')": "el k",
             "SELECT * FROM t WHERE SIMILAR_TO('a.jpg', n=3)": "k=",
-            "SELECT * FROM t WHERE SIMILAR_TO('a.jpg', k=3) USING BTREE": "IVF o HNSW",
+            "SELECT * FROM t WHERE SIMILAR_TO('a.jpg', k=3) USING BTREE": "IVF, HNSW o SEQ",
             "SELECT * FROM t WHERE SIMILAR_TO('a.jpg', k=3) USING IVF WITH cosine": "METRIC",
             "SELECT * FROM t WHERE id = 1 USING HNSW": "solo se usa con SIMILAR_TO",
             "SELECT SIMILARITY_SCORE() FROM t": "solo se usa con SIMILAR_TO",

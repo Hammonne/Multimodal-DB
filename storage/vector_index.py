@@ -9,6 +9,8 @@ from indexes.hnsw import HNSW
 from indexes.ivf import IVF
 from indexes.metricas import get_metrica
 from multimedia import features as F
+from storage.formats.data_types import MEDIA_DATA_TYPES
+from storage.modelo_multimedia import ModeloMultimedia
 from storage.rid import RID
 
 # los vectores van normalizados, así coseno, euclidiana y producto punto dan el mismo
@@ -90,10 +92,17 @@ class VectorSecondaryIndex:
         self.borrados = set()
         self.pendientes = []                    # filas que llegaron antes de tener índice
         self.candidatos = 0
+        # columnas IMAGE / AUDIO: modelo propio (codebook + idf) entrenado con los archivos de la tabla
+        self.modelo = None
+        self.pendientes_media = []              # (ruta, rid) que esperan a que se entrene el modelo
 
     # construcción
 
     def construir(self, table, column_index, nlist=100, M=16, ef_construction=100):
+        self.nlist, self.M, self.ef_construction = nlist, M, ef_construction
+        tipo_columna = table.schema[column_index].strip().lower()
+        if tipo_columna in MEDIA_DATA_TYPES:
+            return self._construir_media(table, column_index, MEDIA_DATA_TYPES[tipo_columna])
         vectores, rids = [], []
         for rid, registro in table.scan():
             v = self._vector_de(registro[column_index])
@@ -114,6 +123,52 @@ class VectorSecondaryIndex:
         self.guardar()
         return self
 
+    def _construir_media(self, table, column_index, tipo):
+        # columna IMAGE o AUDIO: se entrena un modelo con los archivos de esta tabla (no con nuestro dataset)
+        self.tipo = tipo
+        self.modelo = ModeloMultimedia(tipo)
+        self.pendientes_media = []
+        for rid, registro in table.scan():
+            if limpiar(registro[column_index]):
+                self.pendientes_media.append((ruta_archivo(registro[column_index], self.vectorizador.data), rid))
+        self.rids, self.borrados, self.indice = [], set(), None
+        self._entrenar_media()
+        return self
+
+    def _entrenar_media(self):
+        # entrena el codebook con todo lo pendiente y arma el ivf o el hnsw; si no hay filas espera a la primera
+        if not self.pendientes_media:
+            return
+        faltan = [r for r, _ in self.pendientes_media if not os.path.exists(r)]
+        if faltan:
+            raise FileNotFoundError(f"no existe el archivo '{faltan[0]}' (y {len(faltan) - 1} más)"
+                                    if len(faltan) > 1 else f"no existe el archivo '{faltan[0]}'")
+        rutas = [r for r, _ in self.pendientes_media] + getattr(self, "_rutas", [])
+        rids = [rid for _, rid in self.pendientes_media] + [r for i, r in enumerate(self.rids)
+                                                          if i not in self.borrados]
+        self.modelo = ModeloMultimedia(self.tipo).entrenar(rutas)
+        X = self.modelo.vectores_entrenamiento()
+        self._armar(X)
+        self.rids, self.borrados, self._rutas = rids, set(), rutas
+        self.pendientes_media = []
+        self.guardar()
+
+    def _armar(self, X):
+        nlist, M, efc = getattr(self, "nlist", 100), getattr(self, "M", 16), getattr(self, "ef_construction", 100)
+        if self.tipo_indice == "ivf":
+            self.indice = IVF(nlist=max(1, min(nlist, len(X))), metrica=METRICA_INDICE)
+            self.indice.entrenar(X).agregar(X)
+        else:
+            self.indice = HNSW(M=M, ef_construction=efc, metrica=METRICA_INDICE)
+            self.indice.agregar(X)
+
+    def vector_consulta(self, ruta):
+        # el vector de un archivo de consulta con el mismo modelo que la columna
+        if self.modelo is not None:
+            self._entrenar_media()
+            return self.modelo.vector(ruta)
+        return self.vectorizador.vector(ruta)
+
     def _vector_de(self, valor):
         if not limpiar(valor):
             return None
@@ -128,6 +183,18 @@ class VectorSecondaryIndex:
     # mantenimiento desde Table.insert / delete / update
 
     def _insert_ref(self, key, rid):
+        if self.modelo is not None:
+            # columna IMAGE / AUDIO: con el modelo ya entrenado se agrega directo; si no, se espera
+            if not limpiar(key):
+                return
+            ruta = ruta_archivo(key, self.vectorizador.data)
+            if self.modelo.codebook is None or self.indice is None:
+                self.pendientes_media.append((ruta, rid))
+                return
+            self.indice.agregar(self.modelo.vector(ruta)[None])
+            self.rids.append(rid)
+            self._rutas = getattr(self, "_rutas", []) + [ruta]
+            return
         v = self._vector_de(key)
         if v is None:
             return
@@ -155,18 +222,57 @@ class VectorSecondaryIndex:
     # búsqueda
 
     def __len__(self):
-        return len(self.rids) - len(self.borrados) + len(self.pendientes)
+        return len(self.rids) - len(self.borrados) + len(self.pendientes) + len(self.pendientes_media)
 
-    def knn(self, q, k, nprobe=10, ef_search=50):
+    def _ids_de(self, rids_permitidos):
+        # posiciones internas (vigentes) de un conjunto de RIDs
+        return {i for i, r in enumerate(self.rids) if r in rids_permitidos and i not in self.borrados}
+
+    def exacto(self, q, k, rids_permitidos):
+        # [(rid, vector)] de los k más parecidos entre las filas permitidas, comparando con todas
+        # (pre-filtro: lo que hacen qdrant o weaviate cuando el filtro deja pocas filas)
+        if self.modelo is not None and self.pendientes_media:
+            self._entrenar_media()
+        if self.indice is None:
+            pares = [(v, r) for v, r in self.pendientes if r in rids_permitidos]
+        else:
+            ids = self._ids_de(rids_permitidos)
+            if self.tipo_indice == "ivf":
+                V = np.vstack(self.indice.listas_vec)
+                I = np.concatenate(self.indice.listas_ids)
+                m = np.isin(I, np.fromiter(ids, np.int64, len(ids)))
+                pares = [(v, self.rids[int(i)]) for v, i in zip(V[m], I[m])]
+            else:
+                pares = [(self.indice.vectores[i], self.rids[i]) for i in sorted(ids)]
+        self.candidatos = len(pares)
+        if not pares:
+            return []
+        X = np.vstack([v for v, _ in pares])
+        orden = np.argsort(get_metrica(METRICA_INDICE).distancia(q, X), kind="stable")[:k]
+        return [(pares[i][1], pares[i][0]) for i in orden]
+
+    def knn(self, q, k, nprobe=10, ef_search=50, rids_permitidos=None):
         # [(rid, vector)] de los k más parecidos, del más al menos parecido
+        # rids_permitidos: solo esas filas pueden salir (búsqueda filtrada dentro del índice)
+        if self.modelo is not None and self.pendientes_media:
+            self._entrenar_media()
         self.candidatos = 0
         if self.indice is None:
-            if not self.pendientes:
+            pares = [p for p in self.pendientes if rids_permitidos is None or p[1] in rids_permitidos]
+            if not pares:
                 return []
-            X = np.vstack([p[0] for p in self.pendientes])
+            X = np.vstack([p[0] for p in pares])
             orden = np.argsort(get_metrica(METRICA_INDICE).distancia(q, X), kind="stable")
             self.candidatos = len(X)
-            return [(self.pendientes[i][1], self.pendientes[i][0]) for i in orden[:k]]
+            return [(pares[i][1], pares[i][0]) for i in orden[:k]]
+        if rids_permitidos is not None:
+            permitido = self._ids_de(rids_permitidos)
+            if self.tipo_indice == "ivf":
+                ids, _ = self.indice.buscar(q, k, nprobe, permitido)
+            else:
+                ids, _ = self.indice.buscar(q, k, max(ef_search, k), permitido)
+            self.candidatos = self.indice.candidatos
+            return [(self.rids[int(i)], self.vector(int(i))) for i in ids]
         pedir = k + len(self.borrados)
         if self.tipo_indice == "ivf":
             ids, _ = self.indice.buscar(q, pedir, nprobe)
@@ -193,6 +299,8 @@ class VectorSecondaryIndex:
 
     def todos(self):
         # [(rid, vector)] de todo lo vigente, para la búsqueda lineal exacta
+        if self.modelo is not None and self.pendientes_media:
+            self._entrenar_media()
         if self.indice is None:
             return [(r, v) for v, r in self.pendientes]
         return [(r, self.vector(i)) for i, r in enumerate(self.rids) if i not in self.borrados]
@@ -203,9 +311,15 @@ class VectorSecondaryIndex:
         base = self.filename[:-4] if self.filename.endswith(".npz") else self.filename
         return base + "_indice.npz"
 
+    def _ruta_modelo(self):
+        base = self.filename[:-4] if self.filename.endswith(".npz") else self.filename
+        return base + "_modelo.npz"
+
     def guardar(self):
         if self.indice is None:
             return
+        if self.modelo is not None and self.modelo.codebook is not None:
+            self.modelo.guardar(self._ruta_modelo())
         self.indice.guardar(self._ruta_indice())
         np.savez(self.filename, rids=np.array(self.rids, np.int64).reshape(-1, 2),
                  borrados=np.array(sorted(self.borrados), np.int64),
@@ -223,15 +337,125 @@ class VectorSecondaryIndex:
             return False
         self.rids, self.borrados, self.tipo = rids, borrados, str(z["tipo"]) or None
         self.indice = (IVF if self.tipo_indice == "ivf" else HNSW).cargar(ruta_indice)
+        if os.path.exists(self._ruta_modelo()):
+            self.modelo = ModeloMultimedia.cargar(self._ruta_modelo())
         return True
 
     def close(self):
         self.guardar()
 
     def eliminar_archivos(self):
-        for f in (self.filename, self._ruta_indice()):
+        for f in (self.filename, self._ruta_indice(), self._ruta_modelo()):
             if os.path.exists(f):
                 os.remove(f)
+
+    def construir_desde_vectores(
+        self,
+        vectores,
+        rids,
+        nlist=100,
+        M=16,
+        ef_construction=100,
+        metrica=METRICA_INDICE
+    ):
+        """
+        Construye el índice directamente a partir de vectores ya calculados
+        fuera de chutaDB.
+
+        Esta ruta se utiliza para embeddings de IA, por ejemplo:
+        ArcFace / FaceNet.
+
+        No modifica ni utiliza Vectorizador, ExtractFeatures, SIFT, MFCC
+        ni ModeloMultimedia.
+        """
+        X = np.asarray(vectores, dtype=np.float32)
+
+        if X.ndim != 2:
+            raise ValueError(
+                "Los vectores deben tener forma (n_filas, dimensiones)."
+            )
+
+        if len(X) == 0:
+            raise ValueError(
+                "No se puede construir un índice vectorial vacío."
+            )
+
+        if len(X) != len(rids):
+            raise ValueError(
+                f"La cantidad de vectores ({len(X)}) no coincide con "
+                f"la cantidad de RIDs ({len(rids)})."
+            )
+
+        self.nlist = nlist
+        self.M = M
+        self.ef_construction = ef_construction
+        self.tipo = "embedding"
+
+        # Se conserva exactamente la correspondencia:
+        # posición del vector en el índice -> RID de la tabla.
+        self.rids = list(rids)
+        self.borrados = set()
+        self.pendientes = []
+        self.pendientes_media = []
+
+        if self.tipo_indice == "ivf":
+            self.indice = IVF(
+                nlist=max(1, min(nlist, len(X))),
+                metrica=metrica
+            )
+            self.indice.entrenar(X).agregar(X)
+
+        elif self.tipo_indice == "hnsw":
+            self.indice = HNSW(
+                M=M,
+                ef_construction=ef_construction,
+                metrica=metrica
+            )
+            self.indice.agregar(X)
+
+        else:
+            raise ValueError(
+                f"Tipo de índice vectorial no soportado: "
+                f"'{self.tipo_indice}'"
+            )
+
+        self.guardar()
+        return self
+
+    def buscar_embedding(
+        self,
+        embedding,
+        k=10,
+        nprobe=10,
+        ef_search=50,
+        rids_permitidos=None
+    ):
+        """
+        Busca un embedding ya calculado.
+
+        Es un wrapper separado de knn() para no alterar el comportamiento
+        de las búsquedas multimedia existentes.
+        """
+        q = np.asarray(embedding, dtype=np.float32)
+
+        if q.ndim != 1:
+            q = q.reshape(-1)
+
+        if self.indice is None and not self.pendientes:
+            return []
+
+        return self.knn(
+            q,
+            k,
+            nprobe=nprobe,
+            ef_search=ef_search,
+            rids_permitidos=rids_permitidos
+        )
+
+
+
+
+
 
 
 def score(metrica, q, v):

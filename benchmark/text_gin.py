@@ -1,4 +1,8 @@
-"""Benchmark reproducible de PostgreSQL GIN contra el corpus textual.
+"""Baseline GIN para la consola web (compatibilidad).
+
+El benchmark completo, con TF-IDF, BM25, P@10/R@10 y las mismas consultas,
+es ``benchmark/text_based_benchmark.py``. Este script solo genera el archivo
+``benchmark/text/results_gin.json`` que consume la web.
 
 Uso:
     python -m benchmark.text_gin --source data/lyrics.jsonl --sizes 1000 10000
@@ -90,7 +94,7 @@ def run_size(connection: Any, source: str, size: int) -> list[dict[str, Any]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default="data/lyrics.jsonl")
-    parser.add_argument("--sizes", nargs="+", type=int, default=[1_000, 10_000, 100_000])
+    parser.add_argument("--sizes", nargs="+", type=int, default=[1_000, 2_500, 5_000, 7_500, 10_000])
     parser.add_argument("--dsn", default=os.getenv("POSTGRES_DSN", "postgresql://postgres:postgres@localhost:5432/multimodal"))
     parser.add_argument("--output", default="benchmark/text/results_gin.json")
     args = parser.parse_args()
