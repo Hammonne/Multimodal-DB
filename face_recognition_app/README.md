@@ -103,3 +103,69 @@ Los tests usan chutaDB en un directorio temporal. Los de servicio/API usan un mo
   asigna IDs con mapas en memoria y desactiva esa verificación solo en sus dos tablas.
 - **Extensible**: un modelo nuevo = una clase en `embeddings.EMBEDDERS` + `config.MODELS`; el frontend
   arma los selectores desde `/config`.
+
+## Caché de personas frecuentes (Redis)
+
+El reconocimiento tiene dos costos: extraer el embedding (red neuronal) y buscarlo
+en el índice. El embedding no se puede cachear, porque cada foto que entra es
+distinta aunque sea de la misma persona. La búsqueda sí.
+
+`cache.py` mantiene en Redis los embeddings de las caras que más veces se
+reconocieron. Antes de ir al índice se comparan contra ese conjunto caliente con
+un solo producto matriz-vector; si alguna supera el umbral **con margen**, se
+devuelve ese resultado y la búsqueda nunca toca el índice.
+
+```text
+embedding ──> conjunto caliente (Redis)  ──acierto──> resultado   (search_ms = 0)
+                     │ fallo
+                     └──────> VectorStore (Exacto / HNSW / IVF) ──> resultado
+                                                                        │
+                                            se promueve al conjunto ◄───┘
+```
+
+Tres garantías de corrección:
+
+- **El caché nunca devuelve una persona distinta de la que devolvería el índice.**
+  No alcanza con superar el umbral de reconocimiento: se exige además
+  `CACHE_MARGIN`. Una cara ambigua se manda al índice.
+- **Las entradas se aíslan por (modelo, versión de galería).** Al registrar o
+  borrar una persona cambia `FaceRecognitionDB.version(model)` y las entradas
+  viejas dejan de leerse.
+- **Si la cara cacheada ya no existe en la base, el acierto se descarta** y la
+  consulta sigue por el camino normal.
+
+Si Redis no está disponible, el caché degrada a memoria del proceso: la
+aplicación funciona igual, pero el caché no sobrevive al reinicio ni se comparte
+entre procesos.
+
+### Configuración
+
+| Variable | Por defecto | Qué hace |
+|---|---|---|
+| `FACE_APP_REDIS_URL` | `redis://localhost:6379/0` | vacía o inalcanzable → caché en memoria |
+| `FACE_APP_CACHE` | `1` | `0` lo desactiva |
+| `FACE_APP_CACHE_MAX_HOT` | `256` | caras calientes por modelo y versión |
+| `FACE_APP_CACHE_MARGIN` | `0.05` | margen sobre el umbral para resolver por caché |
+
+`docker-compose.yml` ya levanta el servicio `redis` y le pasa la URL al backend.
+
+### Endpoints
+
+```bash
+GET  /api/faces/cache         # backend, aciertos, fallos, hit rate
+POST /api/faces/cache/clear   # vaciar (p. ej. para medir en frío)
+```
+
+En la respuesta de `/recognize`, un resultado servido por caché trae
+`"source": "cache"`, `"search_ms": 0.0` y `"cache_ms"` con lo que costó la
+consulta al conjunto caliente.
+
+### Pruebas
+
+```bash
+python -m pytest face_recognition_starter_tests/test_cache.py -q
+```
+
+16 pruebas: el caché por sí solo, el backend de Redis —contra un servidor real
+si lo hay, y si no contra `fakeredis`— y la integración con `recognize`, que
+verifica que el resultado cacheado coincida con el del índice.

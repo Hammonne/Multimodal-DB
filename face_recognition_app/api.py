@@ -95,6 +95,17 @@ def create_face_router(db: FaceRecognitionDB, service: FaceService | None = None
     def stats():
         return svc.stats()
 
+    @router.get("/cache")
+    def cache_stats():
+        """Estado del cache de personas frecuentes: backend, aciertos y fallos."""
+        return svc.cache.stats()
+
+    @router.post("/cache/clear")
+    def cache_clear():
+        """Vacia el cache. Util al cambiar la galeria o para medir en frio."""
+        svc.cache.invalidate()
+        return svc.cache.stats()
+
     @router.get("/persons")
     def list_persons(q: str = "", limit: int = 24, offset: int = 0, sort: str = "name_asc",
                      source: str | None = None):

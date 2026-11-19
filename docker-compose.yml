@@ -15,6 +15,19 @@ services:
       timeout: 3s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    # El cache de rostros se puede reconstruir, asi que no hace falta
+    # persistirlo: si Redis se reinicia, se vuelve a llenar solo.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   backend:
     build:
       context: .
@@ -27,6 +40,7 @@ services:
     environment:
       WAL_PATH: /app/docker-data/chuta_wal.log
       OLLAMA_BASE_URL: http://ollama:11434
+      FACE_APP_REDIS_URL: redis://redis:6379/0
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
@@ -37,6 +51,8 @@ services:
         condition: service_healthy
       ollama:
         condition: service_started
+      redis:
+        condition: service_healthy
 
   ollama:
     image: ollama/ollama:latest

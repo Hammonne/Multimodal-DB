@@ -93,3 +93,22 @@ MAX_PHOTOS_PER_PERSON = 10
 
 # Dimensión máxima que cabe en la columna FaceImage.embedding (float32 en base64).
 MAX_EMBEDDING_DIM = 512
+
+
+# ----------------------------------------------------------------------
+# Cache de personas frecuentes (Redis)
+# ----------------------------------------------------------------------
+
+# URL de Redis. Si esta vacia, o si Redis no responde, el cache funciona
+# igual pero en memoria del proceso.
+REDIS_URL = os.getenv("FACE_APP_REDIS_URL", "redis://localhost:6379/0")
+
+CACHE_ENABLED = os.getenv("FACE_APP_CACHE", "1") not in ("0", "false", "False")
+
+# Cuantas caras se mantienen calientes por (modelo, version de galeria).
+CACHE_PREFIX = "face"
+CACHE_MAX_HOT = int(os.getenv("FACE_APP_CACHE_MAX_HOT", "256"))
+
+# Margen exigido por encima del umbral de reconocimiento para resolver por
+# cache. Evita que una cara ambigua la resuelva el cache en vez del indice.
+CACHE_MARGIN = float(os.getenv("FACE_APP_CACHE_MARGIN", "0.05"))

@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import dynamic from "next/dynamic";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleStop, Copy, Database, FileBox, History, LockKeyhole, Play, RefreshCw, RotateCcw, Search, Table2, Terminal, X, Zap } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleStop, Copy, Database, FileBox, History, LockKeyhole, Play, RefreshCw, RotateCcw, ScanFace, Search, Table2, Terminal, X, Zap } from "lucide-react";
 import styles from "./page.module.css";
+import FacesPanel from "./FacesPanel";
 import type { SpatialPoint } from "./MapPanel";
 
 const MapPanel = dynamic(() => import("./MapPanel"), { ssr: false });
@@ -441,7 +442,7 @@ export default function Home() {
   const [result, setResult] = useState<QueryResult>({ message: "Ejecuta una consulta para ver sus resultados.", columns: [], rows: [], plan: [], row_count: 0 });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<"queries" | "transactions" | "text" | "multimedia" | "benchmarks" | "rag">("queries");
+  const [view, setView] = useState<"queries" | "transactions" | "text" | "multimedia" | "rag" | "faces">("queries");
   const [toast, setToast] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -718,7 +719,7 @@ export default function Home() {
           <button className={view === "text" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("text")}><Search size={14} /> Texto</button>
           <button className={view === "multimedia" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("multimedia")}><FileBox size={14} /> Multimedia</button>
           <button className={view === "rag" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("rag")}><Zap size={14} /> RAG</button>
-          <button className={view === "benchmarks" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("benchmarks")}><Zap size={14} /> Benchmarks</button>
+          <button className={view === "faces" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("faces")}><ScanFace size={14} /> Rostros</button>
           <button className={view === "transactions" ? styles.viewTabActive : styles.viewTab} onClick={() => setView("transactions")}><LockKeyhole size={14} /> Transacciones</button>
         </nav>
         <div className={styles.status}><span className={styles.statusDot} /> STORAGE ONLINE <span className={styles.divider} /> LOCAL INSTANCE</div>
@@ -739,10 +740,10 @@ export default function Home() {
         <TextSearchPanel />
       ) : view === "multimedia" ? (
         <MultimediaSearchPanel />
+      ) : view === "faces" ? (
+        <FacesPanel />
       ) : view === "rag" ? (
         <RagPanel />
-      ) : view === "benchmarks" ? (
-        <BenchmarkPanel />
       ) : (
         <div className={styles.workspace}>
           <section className={`${styles.panel} ${styles.filesPanel}`}>

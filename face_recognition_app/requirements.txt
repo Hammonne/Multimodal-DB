@@ -11,3 +11,5 @@ onnxruntime
 insightface
 pytest
 httpx
+redis            # cache de personas frecuentes (opcional: sin el, el cache usa memoria)
+fakeredis   # para probar el backend Redis sin servidor

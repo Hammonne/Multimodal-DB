@@ -22,6 +22,7 @@ import numpy as np
 from face_recognition_app import config
 from face_recognition_app.db import FaceRecognitionDB, Person
 from face_recognition_app.embeddings import ImageAnalysis, NoFaceError
+from face_recognition_app.cache import FaceCache
 from face_recognition_app.vector_store import (
     SearchResult,
     TaskTracker,
@@ -48,6 +49,7 @@ class FaceService:
         store: VectorStore | None = None,
         engine_factory: Callable | None = None,
         data_dir: Path | str | None = None,
+        cache: FaceCache | None = None,
     ):
         self.db = db
         self.data_dir = Path(data_dir or config.DATA_DIR)
@@ -64,6 +66,9 @@ class FaceService:
         self._engine_error: str | None = None
         self._engine_lock = threading.Lock()
         self._write_lock = threading.RLock()
+        # Cache de personas frecuentes: evita la busqueda en el indice cuando
+        # la cara ya se reconocio antes con holgura. Ver cache.py.
+        self.cache = cache if cache is not None else FaceCache()
         self._evaluation = {"state": "idle"}  # idle | running | done | error
         self.models = list(config.MODELS)
 
@@ -424,6 +429,70 @@ class FaceService:
         out["db_ms"] = round((time.perf_counter() - started) * 1000, 3)
         return out
 
+    def _format_cached(self, cached, model: str, index: str, metric: str,
+                       k: int, threshold: float) -> dict | None:
+        """
+        Arma la misma respuesta que `_format` a partir de un acierto del cache.
+
+        Devuelve None si la cara cacheada ya no existe en la base (por ejemplo,
+        si se borro a la persona): en ese caso el llamador sigue con la
+        busqueda normal, de modo que un cache desactualizado nunca produce un
+        resultado equivocado.
+        """
+        started = time.perf_counter()
+        face = self.db.get_face(cached.face_id)
+        if face is None:
+            return None
+        person = self.db.get_person(face.person_id)
+        if person is None:
+            return None
+
+        match = {
+            "rank": 1,
+            "face_id": face.face_id,
+            "photo_id": face.photo_id,
+            "person_id": face.person_id,
+            "name": person.name,
+            "distance": round(1.0 - cached.similarity, 6),
+            "similarity": round(cached.similarity, 6),
+            "similarity_pct": similarity_pct(cached.similarity),
+        }
+        persona = {
+            "person_id": face.person_id,
+            "name": person.name,
+            "similarity": match["similarity"],
+            "similarity_pct": match["similarity_pct"],
+            "distance": match["distance"],
+            "best_photo_id": face.photo_id,
+            "votes": 1,
+            "rank": 1,
+        }
+        return {
+            "model": model,
+            "index": index,
+            "metric": metric,
+            "k": int(k),
+            "params": {},
+            # el cache resuelve sin tocar el indice: no hay busqueda que medir
+            "search_ms": 0.0,
+            "candidates": 0,
+            "gallery_size": self.store.gallery(model).size,
+            "decision": {
+                "status": "known",
+                "person_id": face.person_id,
+                "name": person.name,
+                "closest_name": person.name,
+                "similarity_pct": match["similarity_pct"],
+                "threshold": threshold,
+                "threshold_pct": round(threshold * 100, 1),
+            },
+            "persons": [persona],
+            "matches": [match],
+            "source": "cache",
+            "cache_ms": round(cached.lookup_ms, 3),
+            "db_ms": round((time.perf_counter() - started) * 1000, 3),
+        }
+
     def _check_search_params(self, k, ef_search, nprobe) -> None:
         if not 1 <= int(k) <= config.MAX_K:
             raise ValueError(f"k debe estar entre 1 y {config.MAX_K}.")
@@ -458,12 +527,31 @@ class FaceService:
         started = time.perf_counter()
         analysis: ImageAnalysis = self.engine.analyze(image, models=[model])
         faces_out = []
+        version = self.db.version(model)
         for analyzed in analysis.faces:
             entry = analyzed.face.to_dict(analysis.scale)
+            embedding = analyzed.embeddings[model]
+
+            # 1) conjunto caliente: si la cara ya se reconocio antes con
+            #    holgura, no hace falta tocar el indice
+            cached = self.cache.lookup(model, version, embedding, th)
+            if cached is not None:
+                formatted = self._format_cached(cached, model, index, metric, k, th)
+                if formatted is not None:
+                    entry["result"] = formatted
+                    faces_out.append(entry)
+                    continue
+
+            # 2) camino normal: busqueda en el indice vectorial
             with self._write_lock:
-                res = self.store.search(model, analyzed.embeddings[model], index, metric, k,
+                res = self.store.search(model, embedding, index, metric, k,
                                         ef_search, nprobe)
                 entry["result"] = self._format(res, th)
+
+            # 3) si el reconocimiento fue bueno, la cara pasa a estar caliente
+            if entry["result"]["decision"]["status"] == "known" and res.hits:
+                self.cache.record(model, version, res.hits[0].face.face_id, embedding)
+
             faces_out.append(entry)
 
         return {
