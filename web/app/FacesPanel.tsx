@@ -141,18 +141,37 @@ export default function FacesPanel() {
   // ---------------- cámara ----------------
 
   async function startCamera() {
+    setMessage("");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMessage("Este navegador no permite usar la cámara. En Chrome y Firefox "
+                 + "solo funciona sobre https o en localhost.");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
       streamRef.current = stream;
-      setCameraOn(true);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-    } catch {
-      setMessage("No se pudo abrir la cámara. Revisa los permisos del navegador.");
+      setCameraOn(true);   // el stream se engancha en el effect de abajo
+    } catch (error) {
+      const nombre = error instanceof DOMException ? error.name : "";
+      setMessage(
+        nombre === "NotAllowedError"
+          ? "Diste permiso denegado a la cámara. Habilitala desde el candado de la barra de direcciones."
+          : nombre === "NotFoundError"
+          ? "No se encontró ninguna cámara conectada."
+          : "No se pudo abrir la cámara."
+      );
     }
   }
+
+  // El elemento <video> solo existe despues de que React vuelve a renderizar
+  // con cameraOn=true. Por eso el stream se asigna aca y no en startCamera:
+  // alli videoRef.current todavia es null y el video nunca llegaba a cargar.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!cameraOn || !video || !streamRef.current) return;
+    video.srcObject = streamRef.current;
+    video.play().catch(() => setMessage("No se pudo iniciar la vista previa de la cámara."));
+  }, [cameraOn]);
 
   function stopCamera() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -163,16 +182,34 @@ export default function FacesPanel() {
   async function capture() {
     const video = videoRef.current;
     if (!video) return;
+
+    // Si el primer fotograma todavia no llego, videoWidth es 0 y el canvas
+    // saldria vacio. Se espera a que haya imagen antes de capturar.
+    if (!video.videoWidth || !video.videoHeight) {
+      setMessage("La cámara todavía no está lista. Esperá un segundo e intentá de nuevo.");
+      return;
+    }
+
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setMessage("No se pudo procesar la imagen de la cámara.");
+      return;
+    }
+    // El <video> se muestra en espejo por comodidad, pero la foto se guarda
+    // sin invertir: el modelo debe ver el rostro tal como es.
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
     const blob: Blob | null = await new Promise((resolve) =>
       canvas.toBlob((b) => resolve(b), "image/jpeg", 0.92));
-    if (blob) {
-      useFile(new File([blob], "captura.jpg", { type: "image/jpeg" }));
-      stopCamera();
+    if (!blob) {
+      setMessage("No se pudo capturar la foto.");
+      return;
     }
+    useFile(new File([blob], "captura.jpg", { type: "image/jpeg" }));
+    stopCamera();
   }
 
   // ---------------- reconocimiento ----------------
@@ -277,15 +314,42 @@ export default function FacesPanel() {
             )}
           </div>
 
+          {/* El contenedor es mucho mas ancho que alto; sin limitar el ancho y
+              fijar la proporcion, "cover" recortaba el video a una franja. */}
           {cameraOn && (
-            <video ref={videoRef} className={styles.exampleThumbnail}
-                   style={{ width: "100%", maxHeight: 280, objectFit: "cover" }}
-                   playsInline muted />
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <video
+                ref={videoRef}
+                className={styles.exampleThumbnail}
+                style={{
+                  width: "100%",
+                  maxWidth: 420,
+                  aspectRatio: "4 / 3",
+                  objectFit: "contain",
+                  background: "#000",
+                  transform: "scaleX(-1)",   // efecto espejo, como se espera de una webcam
+                }}
+                playsInline
+                muted
+                autoPlay
+              />
+            </div>
           )}
 
           {!cameraOn && preview && (
-            <img className={styles.exampleThumbnail} src={preview} alt="Rostro de consulta"
-                 style={{ width: "100%", maxHeight: 280, objectFit: "contain" }} />
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <img
+                className={styles.exampleThumbnail}
+                src={preview}
+                alt="Rostro de consulta"
+                style={{
+                  width: "100%",
+                  maxWidth: 420,
+                  maxHeight: 360,
+                  objectFit: "contain",
+                }}
+              />
+            </div>
           )}
 
           <div className={styles.queryMeta}>
@@ -387,7 +451,9 @@ export default function FacesPanel() {
                     <th className={styles.resultHeader}>#</th>
                     <th className={styles.resultHeader}>Persona</th>
                     <th className={styles.resultHeader}>Similitud</th>
-                    <th className={styles.resultHeader}>Distancia</th>
+                    <th className={styles.resultHeader}>
+                      {first?.metric === "producto_punto" ? "Producto punto" : "Distancia"}
+                    </th>
                     <th className={styles.resultHeader}>Foto</th>
                   </tr>
                 </thead>
@@ -397,7 +463,14 @@ export default function FacesPanel() {
                       <td className={styles.resultCell}>{match.rank}</td>
                       <td className={styles.resultCell}>{match.name}</td>
                       <td className={styles.resultCell}>{match.similarity_pct.toFixed(1)}%</td>
-                      <td className={styles.resultCell}>{match.distance.toFixed(6)}</td>
+                      {/* El producto punto es una similitud (mas alto = mas parecido).
+                          El indice lo guarda negado para usarlo como distancia, asi que
+                          aca se invierte de vuelta y se muestra tal como es. */}
+                      <td className={styles.resultCell}>
+                        {(first?.metric === "producto_punto"
+                          ? -match.distance
+                          : match.distance).toFixed(6)}
+                      </td>
                       <td className={styles.resultCell}>
                         <img className={styles.multimediaThumbnail}
                              src={`${API}/api/faces/images/${match.photo_id}`}
